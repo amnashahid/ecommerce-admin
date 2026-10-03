@@ -226,6 +226,41 @@ const Categories = () => {
   };
 
   // ============================================
+  // TOP CATEGORY TOGGLE
+  // ============================================
+
+  const handleTopToggle = async (category, topCategory) => {
+    setCategories((prev) =>
+      prev.map((c) =>
+        c._id === category._id ? { ...c, topCategory } : c
+      )
+    );
+
+    try {
+      await axios.patch(
+        `${API_URL}/categories/${category._id}/top`,
+        { topCategory },
+        axiosConfig
+      );
+    } catch (error) {
+      console.error(error);
+
+      setCategories((prev) =>
+        prev.map((c) =>
+          c._id === category._id
+            ? { ...c, topCategory: !topCategory }
+            : c
+        )
+      );
+
+      alert(
+        error.response?.data?.message ||
+          "Failed to update top category"
+      );
+    }
+  };
+
+  // ============================================
   // DELETE
   // ============================================
 
@@ -373,6 +408,17 @@ const Categories = () => {
 
                   <div className="category-actions">
 
+                    <label className="top-category-toggle">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(category.topCategory)}
+                        onChange={(e) =>
+                          handleTopToggle(category, e.target.checked)
+                        }
+                      />
+                      Top
+                    </label>
+
                     <button
                       className="btn-small btn-add"
                       onClick={() =>
@@ -432,13 +478,14 @@ const Categories = () => {
                           <th>Urdu Name</th>
                           <th>Sort Order</th>
                           <th>Status</th>
+                          <th>Top</th>
                           <th className="subcategory-actions-heading">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
                         {subCategories.length === 0 ? (
                           <tr>
-                            <td colSpan="6" className="subcategory-empty">
+                            <td colSpan="7" className="subcategory-empty">
                               No subcategories yet. Add one from this category's actions.
                             </td>
                           </tr>
@@ -467,6 +514,15 @@ const Categories = () => {
                                 <span className={subCategory.isActive ? "status active" : "status inactive"}>
                                   {subCategory.isActive ? "Active" : "Inactive"}
                                 </span>
+                              </td>
+                              <td>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(subCategory.topCategory)}
+                                  onChange={(e) =>
+                                    handleTopToggle(subCategory, e.target.checked)
+                                  }
+                                />
                               </td>
                               <td>
                                 <div className="category-actions">

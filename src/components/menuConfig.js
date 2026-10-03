@@ -7,6 +7,7 @@ import {
   Users,
   Settings,
   HeartHandshake,
+  Layers,
   Rss,
   UserRoundGroup,
   Settings2,
@@ -82,6 +83,12 @@ const menuConfig = [
     parentPath: "/promotions",
     path: "/promotions/deals",
     icon: HeartHandshake,
+  },
+  {
+    title: "Sections",
+    parentPath: "/promotions",
+    path: "/promotions/sections",
+    icon: Layers,
   },
   {
     title: "Customers",

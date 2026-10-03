@@ -1092,7 +1092,7 @@ const Products = () => {
                         {
                           brands.findLast(x=>x._id ===  product
                             .brandId
-                            ?._id ).name.en||
+                            ?._id )?.name.en||
                           "-"
                         }
                       </td>

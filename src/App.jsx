@@ -16,6 +16,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import Sidebar from "./components/Sidebar";
 import "./App.css";
 import Deals from "./pages/promotions/Deals";
+import Sections from "./pages/promotions/Sections";
 import StoreSettings from "./pages/StoreSettings";
 import Users from "./pages/Users";
 import Orders from "./pages/Orders";
@@ -100,6 +101,14 @@ function AppLayout() {
           element={
             <ProtectedRoute>
               <Deals />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/promotions/sections"
+          element={
+            <ProtectedRoute>
+              <Sections />
             </ProtectedRoute>
           }
         />
