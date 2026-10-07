@@ -1,17 +1,75 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const BASE_URL = (import.meta.env.VITE_BASE_URL || "").replace(/\/$/, "");
 
-const token = localStorage.getItem("token");
+const STATUS_FLOW = [
+  "Pending",
+  "Confirmed",
+  "Preparing",
+  "Ready",
+  "Out for Delivery",
+  "Delivered",
+  "Cancelled",
+];
 
-const authConfig = {
-  headers: {
-    Authorization: `Bearer ${token}`,
+const STATUS_META = {
+  Pending: {
+    icon: "○",
+    color: "#f59e0b",
+    bg: "#fff7ed",
+    description: "Order has been placed and is waiting for confirmation.",
+  },
+  Confirmed: {
+    icon: "✓",
+    color: "#3b82f6",
+    bg: "#eff6ff",
+    description: "Order has been confirmed.",
+  },
+  Preparing: {
+    icon: "⚙",
+    color: "#8b5cf6",
+    bg: "#f5f3ff",
+    description: "Order is being prepared.",
+  },
+  Ready: {
+    icon: "✓",
+    color: "#06b6d4",
+    bg: "#ecfeff",
+    description: "Order is ready for dispatch.",
+  },
+  "Out for Delivery": {
+    icon: "➜",
+    color: "#f97316",
+    bg: "#fff7ed",
+    description: "Order is on its way to the customer.",
+  },
+  Delivered: {
+    icon: "✓",
+    color: "#16a34a",
+    bg: "#f0fdf4",
+    description: "Order has been delivered successfully.",
+  },
+  Cancelled: {
+    icon: "×",
+    color: "#dc2626",
+    bg: "#fef2f2",
+    description: "Order has been cancelled.",
   },
 };
 
-const emptyOrderForm = {
+const EMPTY_ITEM = {
+  productId: "",
+  productName: "",
+  productNameUr: "",
+  quantity: 1,
+  unitPrice: 0,
+  dealId: "",
+  dealItem: false,
+};
+
+const EMPTY_FORM = {
   customerId: "",
   addressId: "",
   deliveryDate: "",
@@ -26,51 +84,350 @@ const emptyOrderForm = {
   items: [],
 };
 
-const emptyItem = {
-  productId: "",
-  productName: "",
-  productNameUr: "",
-  quantity: 1,
-  unitPrice: 0,
-  dealId: "",
-  dealItem: false,
+const authConfig = () => {
+  const token = localStorage.getItem("token");
+
+  return token
+    ? {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    : {};
 };
 
-function Orders() {
+/* =========================================================
+   HELPERS
+========================================================= */
+
+const getId = (value) => {
+  if (!value) return "";
+
+  if (typeof value === "object") {
+    return String(
+      value._id ||
+        value.id ||
+        value.orderId ||
+        value.value ||
+        ""
+    );
+  }
+
+  return String(value);
+};
+
+const getOrderId = (order) => {
+  if (!order) return "";
+
+  const directId =
+    order._id ||
+    order.id ||
+    order.orderId;
+
+  if (directId) {
+    return getId(directId);
+  }
+
+  if (order.order) {
+    const nestedId =
+      order.order._id ||
+      order.order.id ||
+      order.order.orderId;
+
+    if (nestedId) {
+      return getId(nestedId);
+    }
+  }
+
+  return "";
+};
+
+const normalizeStatus = (status) => {
+  if (!status) return "";
+
+  return String(status)
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]/g, " ")
+    .replace(/\s+/g, " ");
+};
+
+const getStatusName = (item) => {
+  if (!item) return "";
+
+  return (
+    item.status ||
+    item.newStatus ||
+    item.orderStatus ||
+    item.statusName ||
+    ""
+  );
+};
+
+const getTimelineMessage = (item) => {
+  if (!item) return "";
+
+  return (
+    item.message ||
+    item.note ||
+    item.description ||
+    item.reason ||
+    ""
+  );
+};
+
+const getTimelineDate = (item) => {
+  if (!item) return null;
+
+  return (
+    item.createdAt ||
+    item.updatedAt ||
+    item.date ||
+    item.timestamp ||
+    item.created_on ||
+    null
+  );
+};
+
+const formatDate = (date) => {
+  if (!date) return "—";
+
+  const parsed = new Date(date);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return String(date);
+  }
+
+  return parsed.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+};
+
+const formatDateTime = (date) => {
+  if (!date) return "No timestamp";
+
+  const parsed = new Date(date);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return String(date);
+  }
+
+  return parsed.toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+};
+
+const getArrayResponse = (response, type = "") => {
+  const data = response?.data;
+
+  if (Array.isArray(data)) return data;
+
+  if (Array.isArray(data?.data)) return data.data;
+
+  if (Array.isArray(data?.orders)) return data.orders;
+  if (Array.isArray(data?.customers)) return data.customers;
+  if (Array.isArray(data?.deliverySlots)) return data.deliverySlots;
+
+  if (Array.isArray(data?.data?.orders)) {
+    return data.data.orders;
+  }
+
+  if (Array.isArray(data?.data?.customers)) {
+    return data.data.customers;
+  }
+
+  if (Array.isArray(data?.data?.deliverySlots)) {
+    return data.data.deliverySlots;
+  }
+
+  if (type === "orders" && Array.isArray(data?.result)) {
+    return data.result;
+  }
+
+  return [];
+};
+
+const getObjectResponse = (response, fallback = null) => {
+  const data = response?.data;
+
+  if (data?.data && typeof data.data === "object") {
+    if (data.data.order && typeof data.data.order === "object") {
+      return data.data.order;
+    }
+
+    return data.data;
+  }
+
+  if (data?.order && typeof data.order === "object") {
+    return data.order;
+  }
+
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    return data;
+  }
+
+  return fallback;
+};
+
+const getCustomerName = (order, customers) => {
+  if (!order) return "—";
+
+  if (typeof order.customerId === "object") {
+    return (
+      order.customerId?.name ||
+      "Customer"
+    );
+  }
+
+  if (order.customer?.name) {
+    return order.customer.name;
+  }
+
+  const customerId = getId(order.customerId);
+
+  const customer = customers.find(
+    (item) => getId(item) === customerId
+  );
+
+  if (!customer) return customerId || "—";
+
+  return (
+    customer.name ||
+    customer.fullName ||
+    customer.email ||
+    "Customer"
+  );
+};
+
+const getCustomerPhone = (order, customers) => {
+  if (!order) return "";
+
+  if (typeof order.customerId === "object") {
+    return (
+      order.customerId?.phone ||
+      ""
+    );
+  }
+
+  if (order.customer?.phone) {
+    return order.customer.phone;
+  }
+
+  const customerId = getId(order.customerId);
+
+  const customer = customers.find(
+    (item) => getId(item) === customerId
+  );
+
+  return customer?.phone || customer?.mobile || "";
+};
+
+const getOrderTotal = (order) => {
+  if (!order) return 0;
+
+  // if (
+  //   order.totalAmount !== undefined &&
+  //   order.totalAmount !== null
+  // ) {
+  //   return Number(order.totalAmount) || 0;
+  // }
+
+  // if (
+  //   order.grandTotal !== undefined &&
+  //   order.grandTotal !== null
+  // ) {
+  //   return Number(order.grandTotal) || 0;
+  // }
+
+  // if (
+  //   order.total !== undefined &&
+  //   order.total !== null
+  // ) {
+  //   return Number(order.total) || 0;
+  // }
+
+  const itemTotal = (order.items || []).reduce(
+    (sum, item) =>
+      sum +
+      Number(item.quantity || 0) *
+        Number(
+          item.unitPrice ??
+            item.price ??
+            0
+        ),
+    0
+  );
+  return (
+    itemTotal +
+    Number(order.deliveryFee || 0) -
+    Number(order.discount || 0)
+  );
+};
+
+const getItemPrice = (item) => {
+  return Number(
+    item?.unitPrice ??
+      item?.price ??
+      item?.salePrice ??
+      0
+  );
+};
+
+const getItemName = (item) => {
+  return (
+    item?.productName ||
+    item?.nameEn ||
+    item?.product?.nameEn ||
+    item?.product?.name ||
+    "Product"
+  );
+};
+
+/* =========================================================
+   COMPONENT
+========================================================= */
+
+export default function Orders() {
   const [orders, setOrders] = useState([]);
   const [customers, setCustomers] = useState([]);
-
-  const [customerAddresses, setCustomerAddresses] = useState([]);
   const [deliverySlots, setDeliverySlots] = useState([]);
 
-  const [loading, setLoading] = useState(false);
-  const [loadingAddresses, setLoadingAddresses] = useState(false);
-  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
-  const [showModal, setShowModal] = useState(false);
+  const [showFormModal, setShowFormModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
   const [showTimelineModal, setShowTimelineModal] = useState(false);
 
-  const [editingId, setEditingId] = useState(null);
-
+  const [editingId, setEditingId] = useState("");
   const [selectedOrder, setSelectedOrder] = useState(null);
+
   const [timeline, setTimeline] = useState([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState("");
+  const [timelineStatus, setTimelineStatus] =
+    useState("Pending");
+  const [updatingTimelineStatus, setUpdatingTimelineStatus] =
+    useState(false);
 
-  const [form, setForm] = useState(emptyOrderForm);
+  const [form, setForm] = useState(EMPTY_FORM);
 
-  const [activeFilter, setActiveFilter] = useState("All");
+  const [filter, setFilter] = useState("All");
+  const [search, setSearch] = useState("");
 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    loadOrders();
-    loadCustomers();
-  }, []);
-
-  // ----------------------------------------------------
-  // LOAD ORDERS
-  // ----------------------------------------------------
+  /* =======================================================
+     LOAD DATA
+  ======================================================= */
 
   const loadOrders = async () => {
     try {
@@ -78,337 +435,331 @@ function Orders() {
 
       const response = await axios.get(
         `${API_URL}/orders`,
-        authConfig
+        authConfig()
       );
 
-      setOrders(response.data.data || []);
+      const data = getArrayResponse(response, "orders");
+
+      console.log("ORDERS API RESPONSE:", response.data);
+      console.log("NORMALIZED ORDERS:", data);
+
+      setOrders(data);
     } catch (err) {
-      console.error(err);
+      console.error("Load orders error:", err);
 
       setError(
-        err.response?.data?.message || "Failed to load orders"
+        err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          "Unable to load orders."
       );
     } finally {
       setLoading(false);
     }
   };
 
-  // ----------------------------------------------------
-  // LOAD CUSTOMERS
-  // ----------------------------------------------------
-
   const loadCustomers = async () => {
     try {
       const response = await axios.get(
         `${API_URL}/users/customers`,
-        authConfig
+        authConfig()
       );
 
-      setCustomers(response.data.data || []);
+      setCustomers(
+        getArrayResponse(response, "customers")
+      );
     } catch (err) {
-      console.error(err);
-
-      setError(
-        err.response?.data?.message || "Failed to load customers"
-      );
+      console.error("Load customers error:", err);
     }
   };
 
-  // ----------------------------------------------------
-  // LOAD CUSTOMER ADDRESSES
-  // ----------------------------------------------------
+  const loadSingleOrder = async (orderId, fallback = null) => {
+    const id = getId(orderId);
 
-  const loadCustomerAddresses = async (customerId) => {
-    if (!customerId) {
-      setCustomerAddresses([]);
-      return;
-    }
-    const addresses = customers.find((x) => x._id === customerId)?.addresses || [];
-    setCustomerAddresses(addresses);
-    return addresses;
-    
-
-    // try {
-    //   setLoadingAddresses(true);
-
-    //   const response = await axios.get(
-    //     `${API_URL}/addresses/user/${customerId}`,
-    //     authConfig
-    //   );
-
-    //   const addresses = response.data.data || [];
-
-    //   setCustomerAddresses(addresses);
-
-    //   // Automatically select default address
-    //   if (addresses.length > 0) {
-    //     const defaultAddress =
-    //       addresses.find((x) => x.isDefault) || addresses[0];
-
-    //     setForm((prev) => ({
-    //       ...prev,
-    //       addressId: defaultAddress._id,
-    //       deliveryAddress: defaultAddress.address || "",
-    //     }));
-    //   } else {
-    //     setForm((prev) => ({
-    //       ...prev,
-    //       addressId: "",
-    //       deliveryAddress: "",
-    //     }));
-    //   }
-    // } catch (err) {
-    //   console.error(err);
-
-    //   setCustomerAddresses([]);
-
-    //   setError(
-    //     err.response?.data?.message ||
-    //       "Failed to load customer addresses"
-    //   );
-    // } finally {
-    //   setLoadingAddresses(false);
-    // }
-  };
-
-  // ----------------------------------------------------
-  // LOAD DELIVERY SLOTS
-  // ----------------------------------------------------
-
-  const loadDeliverySlots = async (date) => {
-    if (!date) {
-      setDeliverySlots([]);
-      return;
+    if (!id) {
+      throw new Error("Order ID is missing.");
     }
 
-    try {
-      setLoadingSlots(true);
-        var day = (new Date(date)).getDay();
-      const response = await axios.get(
-        `${API_URL}/delivery-slots/day/${day}`,
-        authConfig
-      );
-
-      setDeliverySlots(response.data.data || []);
-    } catch (err) {
-      console.error(err);
-
-      setDeliverySlots([]);
-
-      setError(
-        err.response?.data?.message ||
-          "Failed to load delivery slots"
-      );
-    } finally {
-      setLoadingSlots(false);
-    }
-  };
-
-  // ----------------------------------------------------
-  // OPEN ADD MODAL
-  // ----------------------------------------------------
-
-  const openAddModal = () => {
-    setEditingId(null);
-    setForm(emptyOrderForm);
-    setCustomerAddresses([]);
-    setDeliverySlots([]);
-    setMessage("");
-    setError("");
-    setShowModal(true);
-  };
-
-  // ----------------------------------------------------
-  // OPEN EDIT MODAL
-  // ----------------------------------------------------
-
-  const openEditModal = async (order) => {
-    try {
-      setEditingId(order._id);
-
-      setMessage("");
-      setError("");
-
-      setForm({
-        customerId: order.customerId?._id || order.customerId || "",
-        addressId: order.deliveryAddress?.addressId || "",
-        deliveryDate: order.deliveryDate
-          ? order.deliveryDate.substring(0, 10)
-          : "",
-        deliverySlotId:
-          order.deliverySlotId?._id ||
-          order.deliverySlotId ||
-          "",
-        deliveryAddress: order.deliveryAddress?.address || "",
-        paymentMethod:
-          order.paymentMethod || "Cash on Delivery",
-        paymentStatus: order.paymentStatus || "Pending",
-        deliveryFee: order.deliveryFee || 0,
-        discount: order.discount || 0,
-        notes: order.notes || "",
-        status: order.status || "Pending",
-        items: order.items || [],
-      });
-
-      setShowModal(true);
-
-      // Load addresses
-      if (order.customerId) {
-        await loadCustomerAddresses(
-          order.customerId?._id || order.customerId
-        );
-      }
-
-      // Load delivery slots
-      if (order.deliveryDate) {
-        await loadDeliverySlots(
-          order.deliveryDate.substring(0, 10)
-        );
-      }
-    } catch (err) {
-      console.error(err);
-
-      setError("Failed to open order");
-    }
-  };
-
-  // ----------------------------------------------------
-  // OPEN VIEW MODAL
-  // ----------------------------------------------------
-
-  const openViewModal = async (order) => {
-    try {
-      const response = await axios.get(
-        `${API_URL}/orders/${order._id}`,
-        authConfig
-      );
-
-      setSelectedOrder(response.data.data);
-
-      setShowViewModal(true);
-    } catch (err) {
-      console.error(err);
-
-      setError(
-        err.response?.data?.message ||
-          "Failed to load order details"
-      );
-    }
-  };
-
-  // ----------------------------------------------------
-  // OPEN TIMELINE
-  // ----------------------------------------------------
-
-  const openTimelineModal = async (order) => {
-    try {
-      const response = await axios.get(
-        `${API_URL}/orders/${order._id}/timeline`,
-        authConfig
-      );
-
-      setTimeline(response.data.data || []);
-      setSelectedOrder(order);
-      setShowTimelineModal(true);
-    } catch (err) {
-      console.error(err);
-
-      setError(
-        err.response?.data?.message ||
-          "Failed to load order timeline"
-      );
-    }
-  };
-
-  // ----------------------------------------------------
-  // CUSTOMER CHANGE
-  // ----------------------------------------------------
-
-  const handleCustomerChange = async (e) => {
-    const customerId = e.target.value;
-
-    setForm((prev) => ({
-      ...prev,
-      customerId,
-      addressId: "",
-      deliveryAddress: "",
-    }));
-
-    await loadCustomerAddresses(customerId);
-  };
-
-  // ----------------------------------------------------
-  // ADDRESS CHANGE
-  // ----------------------------------------------------
-
-  const handleAddressChange = (e) => {
-    const addressId = e.target.value;
-
-    const selectedAddress = customerAddresses.find(
-      (x) => x._id === addressId
+    const response = await axios.get(
+      `${API_URL}/orders/${id}`,
+      authConfig()
     );
 
-    setForm((prev) => ({
-      ...prev,
-      addressId,
-      deliveryAddress: selectedAddress?.address || "",
-    }));
+    console.log(
+      "SINGLE ORDER API RESPONSE:",
+      response.data
+    );
+
+    const order = getObjectResponse(response, fallback);
+
+    if (!order) {
+      throw new Error("Order was not returned by the server.");
+    }
+
+    return {
+      ...order,
+      _id: getOrderId(order) || id,
+    };
   };
 
-  // ----------------------------------------------------
-  // DATE CHANGE
-  // ----------------------------------------------------
+  const loadOrderTimeline = async (orderId) => {
+    const id = getId(orderId);
 
-  const handleDateChange = async (e) => {
-    const date = e.target.value;
+    console.log("TIMELINE ORDER ID:", id);
 
-    setForm((prev) => ({
-      ...prev,
-      deliveryDate: date,
-      deliverySlotId: "",
-    }));
+    if (!id) {
+      throw new Error(
+        "Order ID is missing from the selected order."
+      );
+    }
 
-    await loadDeliverySlots(date);
+    const response = await axios.get(
+      `${API_URL}/orders/${id}/timeline`,
+      authConfig()
+    );
+
+    console.log(
+      "ORDER TIMELINE API RESPONSE:",
+      response.data
+    );
+
+    const responseData = response?.data;
+
+    if (Array.isArray(responseData)) {
+      return responseData;
+    }
+
+    if (Array.isArray(responseData?.data)) {
+      return responseData.data;
+    }
+
+    if (Array.isArray(responseData?.timeline)) {
+      return responseData.timeline;
+    }
+
+    if (Array.isArray(responseData?.data?.timeline)) {
+      return responseData.data.timeline;
+    }
+
+    return [];
   };
 
-  // ----------------------------------------------------
-  // FORM CHANGE
-  // ----------------------------------------------------
+  useEffect(() => {
+    loadOrders();
+    loadCustomers();
+  }, []);
 
-  const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
+  /* =======================================================
+     FILTERING
+  ======================================================= */
 
-    setForm((prev) => ({
-      ...prev,
-      [name]: type === "checkbox" ? checked : value,
-    }));
+  const filteredOrders = useMemo(() => {
+    let result = [...orders];
+
+    if (filter !== "All") {
+      if (filter === "New") {
+        result = result.filter(
+          (order) =>
+            normalizeStatus(order.status) ===
+            normalizeStatus("Pending")
+        );
+      }
+
+      if (filter === "Processing") {
+        result = result.filter((order) =>
+          ["Confirmed", "Preparing", "Ready"].includes(
+            order.status
+          )
+        );
+      }
+
+      if (filter === "Delivery") {
+        result = result.filter(
+          (order) =>
+            normalizeStatus(order.status) ===
+            normalizeStatus("Out for Delivery")
+        );
+      }
+
+      if (filter === "Completed") {
+        result = result.filter(
+          (order) =>
+            normalizeStatus(order.status) ===
+            normalizeStatus("Delivered")
+        );
+      }
+
+      if (filter === "Cancelled") {
+        result = result.filter(
+          (order) =>
+            normalizeStatus(order.status) ===
+            normalizeStatus("Cancelled")
+        );
+      }
+    }
+
+    if (search.trim()) {
+      const query = search.toLowerCase();
+
+      result = result.filter((order) => {
+        const id = getOrderId(order);
+
+        const customer = getCustomerName(
+          order,
+          customers
+        );
+
+        const phone = getCustomerPhone(
+          order,
+          customers
+        );
+
+        return (
+          id.toLowerCase().includes(query) ||
+          customer.toLowerCase().includes(query) ||
+          phone.toLowerCase().includes(query) ||
+          String(order.status || "")
+            .toLowerCase()
+            .includes(query)
+        );
+      });
+    }
+
+    return result;
+  }, [orders, customers, filter, search]);
+
+  const orderSummary = useMemo(() => {
+    const statuses = orders.map((order) =>
+      normalizeStatus(order.status)
+    );
+
+    return {
+      total: orders.length,
+      pending: statuses.filter(
+        (status) => status === normalizeStatus("Pending")
+      ).length,
+      inProgress: statuses.filter((status) =>
+        ["confirmed", "preparing", "ready", "out for delivery"].includes(
+          status
+        )
+      ).length,
+      delivered: statuses.filter(
+        (status) => status === normalizeStatus("Delivered")
+      ).length,
+    };
+  }, [orders]);
+
+  /* =======================================================
+     FORM
+  ======================================================= */
+
+  const resetForm = () => {
+    setForm({
+      ...EMPTY_FORM,
+      items: [],
+    });
+
+    setEditingId("");
   };
 
-  // ----------------------------------------------------
-  // ADD ITEM
-  // ----------------------------------------------------
-
-  const addItem = () => {
-    setForm((prev) => ({
-      ...prev,
-      items: [...prev.items, { ...emptyItem }],
-    }));
+  const openCreateModal = () => {
+    resetForm();
+    setError("");
+    setMessage("");
+    setShowFormModal(true);
   };
 
-  // ----------------------------------------------------
-  // REMOVE ITEM
-  // ----------------------------------------------------
+  const openEditModal = async (order) => {
+    const orderId = getOrderId(order);
 
-  const removeItem = (index) => {
-    setForm((prev) => ({
-      ...prev,
-      items: prev.items.filter((_, i) => i !== index),
-    }));
+    if (!orderId) {
+      setError(
+        "This order does not contain a valid ID. Check the Orders API response."
+      );
+      console.error("ORDER WITHOUT ID:", order);
+      return;
+    }
+
+    try {
+      setError("");
+
+      const latestOrder = await loadSingleOrder(
+        orderId,
+        order
+      );
+
+      setEditingId(orderId);
+
+      setForm({
+        customerId: getId(
+          latestOrder.customerId
+        ),
+        addressId: getId(
+          latestOrder.addressId
+        ),
+        deliveryDate:
+          latestOrder.deliveryDate
+            ? String(
+                latestOrder.deliveryDate
+              ).substring(0, 10)
+            : "",
+        deliverySlotId: getId(
+          latestOrder.deliverySlotId
+        ),
+        deliveryAddress:
+          latestOrder.deliveryAddress || "",
+        paymentMethod:
+          latestOrder.paymentMethod ||
+          "Cash on Delivery",
+        paymentStatus:
+          latestOrder.paymentStatus ||
+          "Pending",
+        deliveryFee:
+          latestOrder.deliveryFee || 0,
+        discount:
+          latestOrder.discount || 0,
+        notes: latestOrder.notes || "",
+        status:
+          latestOrder.status || "Pending",
+        items: (latestOrder.items || []).map(
+          (item) => ({
+            productId: getId(
+              item.productId
+            ),
+            productName:
+              getItemName(item),
+            productNameUr:
+              item.productNameUr || "",
+            quantity:
+              Number(item.quantity) || 1,
+            unitPrice:
+              getItemPrice(item),
+            dealId:
+              getId(item.dealId),
+            dealItem:
+              Boolean(item.dealItem),
+          })
+        ),
+      });
+
+      setShowFormModal(true);
+    } catch (err) {
+      console.error("Open edit error:", err);
+
+      setError(
+        err?.response?.data?.message ||
+          err?.message ||
+          "Unable to load order."
+      );
+    }
   };
 
-  // ----------------------------------------------------
-  // ITEM CHANGE
-  // ----------------------------------------------------
+  const updateForm = (field, value) => {
+    setForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
 
   const updateItem = (index, field, value) => {
     setForm((prev) => {
@@ -426,2369 +777,3785 @@ function Orders() {
     });
   };
 
-  // ----------------------------------------------------
-  // CALCULATE SUBTOTAL
-  // ----------------------------------------------------
-
-  const calculateSubtotal = () => {
-    return form.items.reduce((total, item) => {
-      const quantity = Number(item.quantity || 0);
-      const price = Number(item.unitPrice || 0);
-
-      return total + quantity * price;
-    }, 0);
+  const addItem = () => {
+    setForm((prev) => ({
+      ...prev,
+      items: [
+        ...prev.items,
+        {
+          ...EMPTY_ITEM,
+        },
+      ],
+    }));
   };
 
-  // ----------------------------------------------------
-  // CALCULATE TOTAL
-  // ----------------------------------------------------
-
-  const calculateTotal = () => {
-    const subtotal = calculateSubtotal();
-
-    const discount = Number(form.discount || 0);
-    const deliveryFee = Number(form.deliveryFee || 0);
-
-    return Math.max(
-      0,
-      subtotal - discount + deliveryFee
-    );
+  const removeItem = (index) => {
+    setForm((prev) => ({
+      ...prev,
+      items: prev.items.filter(
+        (_, itemIndex) =>
+          itemIndex !== index
+      ),
+    }));
   };
 
-  // ----------------------------------------------------
-  // SAVE ORDER
-  // ----------------------------------------------------
+  const saveOrder = async (event) => {
+    event.preventDefault();
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
-    setMessage("");
-    setError("");
-
-    try {
-      if (!form.customerId) {
-        setError("Please select a customer.");
-        return;
-      }
-
-      if (!form.addressId) {
-        setError("Please select a delivery address.");
-        return;
-      }
-
-      if (!form.deliveryDate) {
-        setError("Please select a delivery date.");
-        return;
-      }
-
-      if (!form.deliverySlotId) {
-        setError("Please select a delivery slot.");
-        return;
-      }
-
-      if (!form.items.length) {
-        setError("Please add at least one order item.");
-        return;
-      }
-
-      const payload = {
-        customerId: form.customerId,
-
-        addressId: form.addressId,
-
-        deliveryDate: form.deliveryDate,
-
-        deliverySlotId: form.deliverySlotId,
-
-        items: form.items.map((item) => ({
-          productId: item.productId,
-
-          productName: item.productName,
-
-          productNameUr: item.productNameUr || "",
-
-          quantity: Number(item.quantity),
-
-          unitPrice: Number(item.unitPrice),
-
-          dealId: item.dealId || null,
-
-          dealItem: Boolean(item.dealId),
-        })),
-
-        deliveryFee: Number(form.deliveryFee || 0),
-
-        discount: Number(form.discount || 0),
-
-        paymentMethod: form.paymentMethod,
-
-        paymentStatus: form.paymentStatus,
-
-        notes: form.notes,
-
-        status: form.status,
-      };
-
-      console.log(payload);
-      if (editingId) {
-        await axios.put(
-          `${API_URL}/orders/${editingId}`,
-          payload,
-          authConfig
-        );
-
-        setMessage("Order updated successfully.");
-      } else {
-        await axios.post(
-          `${API_URL}/orders`,
-          payload,
-          authConfig
-        );
-
-        setMessage("Order created successfully.");
-      }
-
-      setShowModal(false);
-
-      setForm(emptyOrderForm);
-
-      setCustomerAddresses([]);
-      setDeliverySlots([]);
-
-      await loadOrders();
-    } catch (err) {
-      console.error(err);
-
-      setError(
-        err.response?.data?.message ||
-          "Failed to save order"
-      );
+    if (!form.customerId) {
+      setError("Please select a customer.");
+      return;
     }
-  };
 
-  // ----------------------------------------------------
-  // DELETE ORDER
-  // ----------------------------------------------------
-
-  const handleDelete = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this order?")) {
+    if (!form.items.length) {
+      setError(
+        "Please add at least one order item."
+      );
       return;
     }
 
     try {
-      await axios.delete(
-        `${API_URL}/orders/${id}`,
-        authConfig
-      );
+      setSaving(true);
+      setError("");
+      setMessage("");
 
-      setMessage("Order deleted successfully.");
+      const payload = {
+        customerId: form.customerId,
+        addressId:
+          form.addressId || null,
+        deliveryDate:
+          form.deliveryDate || null,
+        deliverySlotId:
+          form.deliverySlotId || null,
+
+        deliveryAddress:
+          form.deliveryAddress || "",
+
+        items: form.items.map((item) => ({
+          productId: item.productId,
+          productName: item.productName,
+          productNameUr:
+            item.productNameUr || "",
+          quantity:
+            Number(item.quantity) || 1,
+          unitPrice:
+            Number(item.unitPrice) || 0,
+          dealId:
+            item.dealId || null,
+          dealItem:
+            Boolean(item.dealId),
+        })),
+
+        deliveryFee:
+          Number(form.deliveryFee || 0),
+
+        discount:
+          Number(form.discount || 0),
+
+        paymentMethod:
+          form.paymentMethod,
+
+        paymentStatus:
+          form.paymentStatus,
+
+        notes: form.notes,
+
+        status:
+          form.status,
+      };
+
+      if (editingId) {
+        await axios.put(
+          `${API_URL}/orders/${editingId}`,
+          payload,
+          authConfig()
+        );
+
+        setMessage(
+          "Order updated successfully."
+        );
+      } else {
+        await axios.post(
+          `${API_URL}/orders`,
+          payload,
+          authConfig()
+        );
+
+        setMessage(
+          "Order created successfully."
+        );
+      }
+
+      setShowFormModal(false);
+      resetForm();
 
       await loadOrders();
     } catch (err) {
-      console.error(err);
+      console.error("Save order error:", err);
 
       setError(
-        err.response?.data?.message ||
-          "Failed to delete order"
+        err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          "Unable to save order."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /* =======================================================
+     VIEW ORDER
+  ======================================================= */
+
+  const openViewModal = async (order) => {
+    const orderId = getOrderId(order);
+
+    if (!orderId) {
+      setError(
+        "Order ID is missing from this order."
+      );
+      console.error(
+        "VIEW ORDER WITHOUT ID:",
+        order
+      );
+      return;
+    }
+
+    try {
+      setError("");
+
+        // const latestOrder =
+        //   await loadSingleOrder(
+        //     orderId,
+        //     order
+        //   );
+
+      setSelectedOrder(...[order]);
+      setShowViewModal(true);
+    } catch (err) {
+      console.error("View order error:", err);
+
+      setError(
+        err?.response?.data?.message ||
+          err?.message ||
+          "Unable to load order."
       );
     }
   };
 
-  // ----------------------------------------------------
-  // STATUS CHANGE
-  // ----------------------------------------------------
+  /* =======================================================
+     DELETE
+  ======================================================= */
 
-  const handleStatusChange = async (order, status) => {
+  const deleteOrder = async (order) => {
+    const orderId = getOrderId(order);
+
+    if (!orderId) {
+      setError(
+        "Order ID is missing. The order cannot be deleted."
+      );
+      console.error(
+        "DELETE ORDER WITHOUT ID:",
+        order
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this order?"
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeleting(true);
+      setError("");
+
+      await axios.delete(
+        `${API_URL}/orders/${orderId}`,
+        authConfig()
+      );
+
+      setMessage(
+        "Order deleted successfully."
+      );
+
+      await loadOrders();
+    } catch (err) {
+      console.error("Delete order error:", err);
+
+      setError(
+        err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          "Unable to delete order."
+      );
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  /* =======================================================
+     TIMELINE
+  ======================================================= */
+
+  const openTimelineModal = async (order) => {
+    console.log(
+      "TIMELINE CLICKED ORDER:",
+      order
+    );
+
+    const orderId = getOrderId(order);
+
+    console.log(
+      "RESOLVED TIMELINE ORDER ID:",
+      orderId
+    );
+
+    setTimeline([]);
+    setTimelineError("");
+
+    if (!orderId) {
+      setSelectedOrder(order);
+      setTimelineStatus(
+        order?.status || "Pending"
+      );
+      setShowTimelineModal(true);
+
+      setTimelineError(
+        "Order ID is missing from this order record. Open the browser console and check the order object returned by GET /orders."
+      );
+
+      return;
+    }
+
+    setSelectedOrder({
+      ...order,
+      _id: orderId,
+    });
+
+    setTimelineStatus(
+      order?.status || "Pending"
+    );
+
+    setShowTimelineModal(true);
+    setTimelineLoading(true);
+
+    try {
+      const latestOrder =
+        await loadSingleOrder(
+          orderId,
+          order
+        );
+
+      const normalizedLatestOrder = {
+        ...latestOrder,
+        _id:
+          getOrderId(latestOrder) ||
+          orderId,
+      };
+
+      setSelectedOrder(
+        normalizedLatestOrder
+      );
+
+      setTimelineStatus(
+        normalizedLatestOrder.status ||
+          order.status ||
+          "Pending"
+      );
+
+      const timelineData =
+        await loadOrderTimeline(
+          orderId
+        );
+
+      console.log(
+        "NORMALIZED TIMELINE:",
+        timelineData
+      );
+
+      setTimeline(
+        Array.isArray(timelineData)
+          ? timelineData
+          : []
+      );
+    } catch (err) {
+      console.error(
+        "Timeline API ERROR:",
+        err
+      );
+
+      setTimelineError(
+        err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          "Unable to load order timeline."
+      );
+
+      setTimeline([]);
+    } finally {
+      setTimelineLoading(false);
+    }
+  };
+
+  const getLatestTimelineForStatus = (
+    status
+  ) => {
+    const matches = timeline.filter(
+      (item) =>
+        normalizeStatus(
+          getStatusName(item)
+        ) === normalizeStatus(status)
+    );
+
+    if (!matches.length) {
+      return null;
+    }
+
+    return [...matches].sort((a, b) => {
+      const dateA = new Date(
+        getTimelineDate(a) || 0
+      ).getTime();
+
+      const dateB = new Date(
+        getTimelineDate(b) || 0
+      ).getTime();
+
+      return dateB - dateA;
+    })[0];
+  };
+
+  const isTimelineReached = (status) => {
+    return Boolean(
+      getLatestTimelineForStatus(status)
+    );
+  };
+
+  const getTimelineStepState = (
+    status,
+    index
+  ) => {
+    const currentStatus =
+      selectedOrder?.status ||
+      "Pending";
+
+    const currentIndex =
+      STATUS_FLOW.findIndex(
+        (item) =>
+          normalizeStatus(item) ===
+          normalizeStatus(currentStatus)
+      );
+
+    const reached =
+      isTimelineReached(status);
+
+    const statusIndex = index;
+
+    if (
+      normalizeStatus(status) ===
+      normalizeStatus("Cancelled")
+    ) {
+      if (reached) return "completed";
+      if (
+        normalizeStatus(currentStatus) ===
+        normalizeStatus("Cancelled")
+      ) {
+        return "current";
+      }
+      return "future";
+    }
+
+    if (reached) {
+      if (
+        normalizeStatus(status) ===
+        normalizeStatus(currentStatus)
+      ) {
+        return "current";
+      }
+
+      return "completed";
+    }
+
+    if (
+      normalizeStatus(status) ===
+      normalizeStatus(currentStatus)
+    ) {
+      return "current";
+    }
+
+    if (
+      currentIndex >= 0 &&
+      statusIndex < currentIndex
+    ) {
+      return "not-recorded";
+    }
+
+    return "future";
+  };
+
+  const updateTimelineStatus = async () => {
+    const orderId =
+      getOrderId(selectedOrder);
+
+    console.log(
+      "STATUS UPDATE ORDER:",
+      selectedOrder
+    );
+
+    console.log(
+      "STATUS UPDATE ORDER ID:",
+      orderId
+    );
+
+    if (!orderId) {
+      setTimelineError(
+        "Order ID is missing from the selected order."
+      );
+      return;
+    }
+
+    if (!timelineStatus) {
+      setTimelineError(
+        "Please select a status."
+      );
+      return;
+    }
+
+    if (
+      normalizeStatus(
+        selectedOrder?.status
+      ) ===
+      normalizeStatus(timelineStatus)
+    ) {
+      setTimelineError(
+        "Order is already at this status."
+      );
+      return;
+    }
+
+    try {
+      setUpdatingTimelineStatus(true);
+      setTimelineError("");
+      setMessage("");
+
+      await axios.put(
+        `${API_URL}/orders/${orderId}/status`,
+        {
+          status: timelineStatus,
+        },
+        authConfig()
+      );
+
+      const latestOrder =
+        await loadSingleOrder(
+          orderId,
+          selectedOrder
+        );
+
+      const normalizedOrder = {
+        ...latestOrder,
+        _id:
+          getOrderId(latestOrder) ||
+          orderId,
+      };
+
+      const latestTimeline =
+        await loadOrderTimeline(
+          orderId
+        );
+
+      setSelectedOrder(
+        normalizedOrder
+      );
+
+      setTimeline(
+        Array.isArray(latestTimeline)
+          ? latestTimeline
+          : []
+      );
+
+      setTimelineStatus(
+        normalizedOrder.status ||
+          timelineStatus
+      );
+
+      await loadOrders();
+
+      setMessage(
+        `Order status changed to "${normalizedOrder.status || timelineStatus}".`
+      );
+    } catch (err) {
+      console.error(
+        "Timeline status update error:",
+        err
+      );
+
+      setTimelineError(
+        err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          "Unable to update order status."
+      );
+    } finally {
+      setUpdatingTimelineStatus(false);
+    }
+  };
+
+  /* =======================================================
+     QUICK STATUS FROM TABLE
+  ======================================================= */
+
+  const handleStatusChange = async (
+    order,
+    status
+  ) => {
+    const orderId = getOrderId(order);
+
+    if (!orderId) {
+      setError(
+        "Order ID is missing from this order."
+      );
+      return;
+    }
+
     try {
       await axios.put(
-        `${API_URL}/orders/${order._id}/status`,
+        `${API_URL}/orders/${orderId}/status`,
         {
           status,
         },
-        authConfig
+        authConfig()
       );
 
       await loadOrders();
 
-      if (showViewModal) {
-        const response = await axios.get(
-          `${API_URL}/orders/${order._id}`,
-          authConfig
-        );
-
-        setSelectedOrder(response.data.data);
-      }
-
-      setMessage("Order status updated.");
+      setMessage(
+        `Order status changed to ${status}.`
+      );
     } catch (err) {
-      console.error(err);
+      console.error(
+        "Status update error:",
+        err
+      );
 
       setError(
-        err.response?.data?.message ||
-          "Failed to update status"
+        err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          "Unable to update order status."
       );
     }
   };
 
-  // ----------------------------------------------------
-  // FILTER ORDERS
-  // ----------------------------------------------------
+  /* =======================================================
+     TOTALS
+  ======================================================= */
 
-  const getFilteredOrders = () => {
-    if (activeFilter === "All") {
-      return orders;
-    }
+  const formSubtotal = form.items.reduce(
+    (sum, item) =>
+      sum +
+      Number(item.quantity || 0) *
+        Number(item.unitPrice || 0),
+    0
+  );
 
-    if (activeFilter === "New") {
-      return orders.filter(
-        (x) => x.status === "Pending"
-      );
-    }
+  const formTotal =
+    formSubtotal +
+    Number(form.deliveryFee || 0) -
+    Number(form.discount || 0);
 
-    if (activeFilter === "Processing") {
-      return orders.filter((x) =>
-        ["Confirmed", "Preparing", "Ready"].includes(
-          x.status
-        )
-      );
-    }
-
-    if (activeFilter === "Delivery") {
-      return orders.filter(
-        (x) => x.status === "Out for Delivery"
-      );
-    }
-
-    if (activeFilter === "Completed") {
-      return orders.filter(
-        (x) => x.status === "Delivered"
-      );
-    }
-
-    if (activeFilter === "Cancelled") {
-      return orders.filter(
-        (x) => x.status === "Cancelled"
-      );
-    }
-
-    return orders;
-  };
-
-  const filteredOrders = getFilteredOrders();
-
-  // ----------------------------------------------------
-  // HELPERS
-  // ----------------------------------------------------
-
-  const getCustomerName = (order) => {
-    if (!order.customerId) {
-      return "-";
-    }
-
-    if (typeof order.customerId === "object") {
-      return (
-        `${order.customerId.firstName || ""} ${
-          order.customerId.lastName || ""
-        }`.trim() ||
-        order.customerId.phone ||
-        "-"
-      );
-    }
-
-    const customer = customers.find(
-      (x) => x._id === order.customerId
-    );
-
-    if (!customer) {
-      return "-";
-    }
-
-    return (
-      `${customer.firstName || ""} ${
-        customer.lastName || ""
-      }`.trim() ||
-      customer.phone ||
-      "-"
-    );
-  };
-
-  const getStatusStyle = (status) => {
-    const styles = {
-      Pending: {
-        background: "#fff3cd",
-        color: "#856404",
-      },
-
-      Confirmed: {
-        background: "#cfe2ff",
-        color: "#084298",
-      },
-
-      Preparing: {
-        background: "#e2e3e5",
-        color: "#41464b",
-      },
-
-      Ready: {
-        background: "#cff4fc",
-        color: "#055160",
-      },
-
-      "Out for Delivery": {
-        background: "#d1ecf1",
-        color: "#0c5460",
-      },
-
-      Delivered: {
-        background: "#d1e7dd",
-        color: "#0f5132",
-      },
-
-      Cancelled: {
-        background: "#f8d7da",
-        color: "#842029",
-      },
-    };
-
-    return {
-      padding: "5px 9px",
-      borderRadius: "20px",
-      fontSize: "12px",
-      fontWeight: "600",
-      ...styles[status],
-    };
-  };
-
-  const formatDate = (date) => {
-    if (!date) {
-      return "-";
-    }
-
-    return new Date(date).toLocaleDateString();
-  };
-
-  // ----------------------------------------------------
-  // STYLES
-  // ----------------------------------------------------
-
-  const cardStyle = {
-    background: "#fff",
-    borderRadius: "10px",
-    padding: "20px",
-    marginBottom: "20px",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-  };
-
-  const inputStyle = {
-    width: "100%",
-    boxSizing: "border-box",
-    padding: "10px 12px",
-    marginTop: "6px",
-    marginBottom: "5px",
-    border: "1px solid #ddd",
-    borderRadius: "6px",
-    fontSize: "14px",
-  };
-
-  const buttonStyle = {
-    background: "#f28c28",
-    color: "#fff",
-    border: "none",
-    padding: "11px 18px",
-    borderRadius: "6px",
-    cursor: "pointer",
-    fontWeight: "600",
-  };
-
-  const secondaryButtonStyle = {
-    background: "#6c757d",
-    color: "#fff",
-    border: "none",
-    padding: "8px 12px",
-    borderRadius: "5px",
-    cursor: "pointer",
-    fontSize: "13px",
-  };
-
-  const dangerButtonStyle = {
-    background: "#dc3545",
-    color: "#fff",
-    border: "none",
-    padding: "8px 12px",
-    borderRadius: "5px",
-    cursor: "pointer",
-    fontSize: "13px",
-  };
-
-  const smallButtonStyle = {
-    background: "#f28c28",
-    color: "#fff",
-    border: "none",
-    padding: "7px 11px",
-    borderRadius: "5px",
-    cursor: "pointer",
-    fontSize: "12px",
-  };
-
-  const labelStyle = {
-    fontSize: "13px",
-    fontWeight: "600",
-    color: "#444",
-  };
-
-  const gridStyle = {
-    display: "grid",
-    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-    gap: "15px",
-  };
-
-  const modalOverlayStyle = {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(0,0,0,0.45)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1000,
-    padding: "20px",
-  };
-
-  const modalStyle = {
-    background: "#fff",
-    width: "100%",
-    maxWidth: "1000px",
-    maxHeight: "calc(100vh - 40px)",
-    borderRadius: "10px",
-    display: "flex",
-    flexDirection: "column",
-    overflow: "hidden",
-  };
-
-  const modalHeaderStyle = {
-    padding: "18px 20px",
-    borderBottom: "1px solid #eee",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    flexShrink: 0,
-  };
-
-  const modalBodyStyle = {
-    padding: "20px",
-    overflowY: "auto",
-    flex: 1,
-  };
-
-  const modalFooterStyle = {
-    padding: "15px 20px",
-    borderTop: "1px solid #eee",
-    display: "flex",
-    justifyContent: "flex-end",
-    gap: "10px",
-    flexShrink: 0,
-  };
-
-  const closeButtonStyle = {
-    border: "none",
-    background: "transparent",
-    fontSize: "25px",
-    cursor: "pointer",
-    color: "#666",
-  };
-
-  // ----------------------------------------------------
-  // RENDER
-  // ----------------------------------------------------
+  /* =======================================================
+     RENDER
+  ======================================================= */
 
   return (
-    <div
-      style={{
-        background: "#f5f6f8",
-        minHeight: "100vh",
-        padding: "25px",
-      }}
-    >
-      {/* HEADER */}
+    <div className="orders-page">
+      <style>{`
+        .orders-page *,
+        .orders-page *::before,
+        .orders-page *::after {
+          box-sizing: border-box;
+        }
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "20px",
-        }}
-      >
-        <div>
-          <h2
-            style={{
-              margin: 0,
-              color: "#333",
-            }}
-          >
-            Orders
-          </h2>
+        .orders-page {
+          min-height: 100vh;
+          background:
+            radial-gradient(ellipse at top left, rgba(255, 237, 213, .52), transparent 34%),
+            #f5f7fb;
+          padding: 36px clamp(20px, 3vw, 48px);
+          color: #182230;
+          font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
 
-          <p
-            style={{
-              margin: "5px 0 0",
-              color: "#777",
-              fontSize: "14px",
-            }}
-          >
-            Manage customer orders and delivery
-          </p>
-        </div>
+        .orders-container {
+          max-width: 1480px;
+          margin: 0 auto;
+        }
 
-        <button
-          style={buttonStyle}
-          onClick={openAddModal}
-        >
-          + Add Order
-        </button>
-      </div>
+        .page-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 20px;
+          margin-bottom: 25px;
+        }
 
-      {/* MESSAGES */}
+        .page-title {
+          margin: 0;
+          color: #172033;
+          font-size: clamp(28px, 3vw, 36px);
+          font-weight: 800;
+          letter-spacing: -1.1px;
+          line-height: 1.1;
+        }
 
-      {message && (
-        <div
-          style={{
-            background: "#d1e7dd",
-            color: "#0f5132",
-            padding: "12px 15px",
-            borderRadius: "6px",
-            marginBottom: "15px",
-          }}
-        >
-          {message}
-        </div>
-      )}
+        .page-subtitle {
+          margin: 9px 0 0;
+          color: #748094;
+          font-size: 14px;
+        }
 
-      {error && (
-        <div
-          style={{
-            background: "#f8d7da",
-            color: "#842029",
-            padding: "12px 15px",
-            borderRadius: "6px",
-            marginBottom: "15px",
-          }}
-        >
-          {error}
+        .primary-button {
+          border: 0;
+          background: linear-gradient(135deg, #f49732, #ed7b1a);
+          color: white;
+          padding: 12px 17px;
+          border-radius: 11px;
+          font-weight: 700;
+          font-size: 13px;
+          cursor: pointer;
+          box-shadow: 0 7px 15px rgba(237, 123, 26, .2);
+          transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+        }
+
+        .primary-button:hover {
+          background: linear-gradient(135deg, #ed8723, #df6f12);
+          box-shadow: 0 10px 20px rgba(237, 123, 26, .27);
+          transform: translateY(-2px);
+        }
+
+        .primary-button:focus-visible,
+        .action-button:focus-visible,
+        .filter-button:focus-visible,
+        .close-button:focus-visible,
+        .secondary-button:focus-visible {
+          outline: 3px solid rgba(242, 140, 40, .3);
+          outline-offset: 2px;
+        }
+
+        .orders-summary {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+          margin-bottom: 20px;
+        }
+
+        .summary-card {
+          position: relative;
+          overflow: hidden;
+          min-height: 112px;
+          padding: 18px 20px;
+          border: 1px solid #e8ecf2;
+          border-radius: 15px;
+          background: rgba(255, 255, 255, .92);
+          box-shadow: 0 5px 18px rgba(28, 39, 60, .035);
+        }
+
+        .summary-card::after {
+          position: absolute;
+          top: 0;
+          right: 0;
+          width: 4px;
+          height: 100%;
+          background: var(--summary-color, #f28c28);
+          content: "";
+          opacity: .9;
+        }
+
+        .summary-label {
+          color: #758196;
+          font-size: 12px;
+          font-weight: 650;
+          letter-spacing: .15px;
+        }
+
+        .summary-value {
+          display: block;
+          margin-top: 8px;
+          color: #182230;
+          font-size: 27px;
+          font-weight: 800;
+          letter-spacing: -.7px;
+          line-height: 1;
+        }
+
+        .summary-caption {
+          margin-top: 7px;
+          color: #9aa3b2;
+          font-size: 11px;
+        }
+
+        .toolbar {
+          background: white;
+          border: 1px solid #e8ecf2;
+          border-radius: 15px;
+          padding: 14px;
+          margin-bottom: 16px;
+          display: flex;
+          gap: 16px;
+          align-items: center;
+          justify-content: space-between;
+          flex-wrap: wrap;
+          box-shadow: 0 5px 18px rgba(28, 39, 60, .035);
+        }
+
+        .search-box {
+          flex: 1;
+          min-width: 240px;
+          position: relative;
+        }
+
+        .search-box input {
+          width: 100%;
+          height: 43px;
+          border: 1px solid #e2e7ee;
+          border-radius: 10px;
+          padding: 0 14px;
+          outline: none;
+          font-size: 14px;
+          color: #293446;
+          background: #fbfcfe;
+          transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+        }
+
+        .search-box input::placeholder {
+          color: #a0a9b7;
+        }
+
+        .search-box input:focus {
+          border-color: #f28c28;
+          background: #fff;
+          box-shadow: 0 0 0 3px rgba(242, 140, 40, .11);
+        }
+
+        .filter-group {
+          display: flex;
+          gap: 6px;
+          flex-wrap: wrap;
+        }
+
+        .filter-button {
+          border: 1px solid transparent;
+          background: #f6f7f9;
+          padding: 9px 12px;
+          border-radius: 9px;
+          cursor: pointer;
+          color: #697588;
+          font-size: 12px;
+          font-weight: 600;
+          transition: color .16s ease, background .16s ease, border-color .16s ease;
+        }
+
+        .filter-button:hover {
+          background: #fff8f0;
+          color: #c96c13;
+        }
+
+        .filter-button.active {
+          background: #fff2e3;
+          border-color: #ffd5ad;
+          color: #c96c13;
+        }
+
+        .alert {
+          border-radius: 10px;
+          padding: 12px 14px;
+          margin-bottom: 14px;
+          font-size: 14px;
+        }
+
+        .alert-error {
+          background: #fff0f0;
+          border: 1px solid #ffd1d1;
+          color: #b42318;
+        }
+
+        .alert-success {
+          background: #ecfdf3;
+          border: 1px solid #b7ebc9;
+          color: #087443;
+        }
+
+        .table-card {
+          background: white;
+          border: 1px solid #e8ecf2;
+          border-radius: 16px;
+          overflow: hidden;
+          box-shadow: 0 8px 24px rgba(28, 39, 60, .045);
+        }
+
+        .table-heading {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          padding: 19px 21px;
+          border-bottom: 1px solid #edf0f4;
+        }
+
+        .table-title {
+          margin: 0;
+          color: #202b3b;
+          font-size: 15px;
+          font-weight: 750;
+          letter-spacing: -.15px;
+        }
+
+        .table-description {
+          margin-top: 4px;
+          color: #8b96a7;
+          font-size: 12px;
+        }
+
+        .result-count {
+          flex-shrink: 0;
+          padding: 6px 10px;
+          border-radius: 999px;
+          background: #f4f6f9;
+          color: #697588;
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .table-wrapper {
+          overflow-x: auto;
+        }
+
+        .orders-page table {
+          width: 100%;
+          border-collapse: collapse;
+          min-width: 1050px;
+        }
+
+        .orders-page th {
+          text-align: left;
+          padding: 13px 16px;
+          background: #f8f9fb;
+          border-bottom: 1px solid #e9edf2;
+          color: #8390a2;
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: .65px;
+          white-space: nowrap;
+        }
+
+        .orders-page td {
+          padding: 15px 16px;
+          border-bottom: 1px solid #f0f2f5;
+          vertical-align: middle;
+          color: #4e596b;
+          font-size: 13px;
+        }
+
+        .orders-page tbody tr {
+          transition: background .15s ease;
+        }
+
+        .orders-page tbody tr:hover {
+          background: #fffaf5;
+        }
+
+        .orders-page tbody tr:last-child td {
+          border-bottom: 0;
+        }
+
+        .order-id {
+          font-weight: 800;
+          color: #263247;
+          letter-spacing: .1px;
+        }
+
+        .customer-name {
+          font-weight: 700;
+          margin-bottom: 3px;
+          color: #354155;
+        }
+
+        .customer-phone {
+          font-size: 12px;
+          color: #929dad;
+        }
+
+        .status-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          padding: 6px 9px;
+          border-radius: 999px;
+          font-size: 12px;
+          font-weight: 700;
+          white-space: nowrap;
+        }
+
+        .status-select {
+          max-width: 150px;
+          border: 1px solid #e2e7ee;
+          border-radius: 8px;
+          padding: 7px 26px 7px 9px;
+          background: #fff;
+          font-size: 12px;
+          outline: none;
+          color: #475467;
+          cursor: pointer;
+        }
+
+        .status-select:focus {
+          border-color: #f28c28;
+          box-shadow: 0 0 0 3px rgba(242, 140, 40, .1);
+        }
+
+        .actions {
+          display: flex;
+          gap: 5px;
+          flex-wrap: nowrap;
+        }
+
+        .action-button {
+          border: 1px solid #e3e7ed;
+          background: white;
+          border-radius: 7px;
+          padding: 7px 8px;
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          color: #687487;
+          transition: color .15s ease, background .15s ease, border-color .15s ease;
+          white-space: nowrap;
+        }
+
+        .action-button:disabled {
+          opacity: .45;
+          cursor: not-allowed;
+        }
+
+        .action-button:hover {
+          border-color: #f28c28;
+          color: #c96c13;
+          background: #fffaf5;
+        }
+
+        .action-button.timeline {
+          border-color: #f7d5b2;
+          color: #bd6818;
+          background: #fff8f0;
+        }
+
+        .action-button.danger {
+          color: #b42318;
+        }
+
+        .action-button.danger:hover {
+          border-color: #f3c2bd;
+          background: #fff5f4;
+        }
+
+        .empty-state {
+          padding: 70px 20px;
+          text-align: center;
+          color: #8490a1;
+        }
+
+        .loading {
+          padding: 70px;
+          text-align: center;
+          color: #8490a1;
+        }
+
+        /* MODAL */
+
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, .58);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+          z-index: 1000;
+          backdrop-filter: blur(3px);
+        }
+
+        .modal {
+          background: white;
+          width: min(900px, 100%);
+          max-height: 90vh;
+          border: 1px solid rgba(255, 255, 255, .65);
+          border-radius: 20px;
+          overflow: hidden;
+          box-shadow: 0 28px 90px rgba(14, 24, 42, .28);
+          display: flex;
+          flex-direction: column;
+        }
+
+        .modal-header {
+          padding: 20px 24px;
+          border-bottom: 1px solid #edf0f4;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 15px;
+          flex-shrink: 0;
+          background: linear-gradient(110deg, #fffaf4, #fff 65%);
+        }
+
+        .modal-title {
+          margin: 0;
+          color: #202b3b;
+          font-size: 20px;
+          font-weight: 800;
+          letter-spacing: -.4px;
+        }
+
+        .modal-subtitle {
+          margin: 4px 0 0;
+          color: #8b96a7;
+          font-size: 12px;
+        }
+
+        .close-button {
+          width: 34px;
+          height: 34px;
+          border-radius: 50%;
+          border: 0;
+          background: #f4f4f5;
+          cursor: pointer;
+          font-size: 18px;
+          color: #555;
+        }
+
+        .modal-body {
+          padding: 24px;
+          overflow-y: auto;
+          flex: 1;
+        }
+
+        .modal-footer {
+          padding: 15px 24px;
+          border-top: 1px solid #edf0f4;
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          flex-shrink: 0;
+          background: #fbfcfd;
+        }
+
+        .secondary-button {
+          border: 1px solid #e0e5ec;
+          background: white;
+          color: #586579;
+          padding: 10px 15px;
+          border-radius: 9px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: border-color .16s ease, color .16s ease, background .16s ease;
+        }
+
+        .secondary-button:hover {
+          border-color: #f2bd8d;
+          color: #bd6818;
+          background: #fffaf5;
+        }
+
+        .form-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0,1fr));
+          gap: 15px;
+        }
+
+        .form-group {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .form-group.full {
+          grid-column: 1 / -1;
+        }
+
+        .form-label {
+          font-size: 12px;
+          color: #666;
+          font-weight: 700;
+        }
+
+        .form-input,
+        .form-select,
+        .form-textarea {
+          width: 100%;
+          border: 1px solid #ddd;
+          border-radius: 9px;
+          padding: 10px 11px;
+          font-size: 14px;
+          outline: none;
+          background: white;
+        }
+
+        .form-input:focus,
+        .form-select:focus,
+        .form-textarea:focus {
+          border-color: #f28c28;
+          box-shadow: 0 0 0 3px rgba(242,140,40,.08);
+        }
+
+        .form-textarea {
+          min-height: 90px;
+          resize: vertical;
+        }
+
+        .section-box {
+          border: 1px solid #e9e9e9;
+          border-radius: 12px;
+          padding: 15px;
+          margin-bottom: 18px;
+        }
+
+        .section-box-title {
+          font-size: 14px;
+          font-weight: 800;
+          margin: 0 0 13px;
+        }
+
+        .item-row {
+          display: grid;
+          grid-template-columns: 1.5fr .7fr .7fr 38px;
+          gap: 8px;
+          margin-bottom: 9px;
+        }
+
+        .remove-item {
+          border: 0;
+          border-radius: 8px;
+          background: #fff0f0;
+          color: #d92d20;
+          cursor: pointer;
+          font-weight: 800;
+        }
+
+        .add-item {
+          border: 1px dashed #f28c28;
+          color: #d96f0b;
+          background: #fffaf5;
+          border-radius: 8px;
+          padding: 9px 12px;
+          cursor: pointer;
+          font-weight: 700;
+        }
+
+        .totals {
+          margin-left: auto;
+          width: min(320px,100%);
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .total-row {
+          display: flex;
+          justify-content: space-between;
+          color: #666;
+          font-size: 13px;
+        }
+
+        .total-row.grand {
+          border-top: 1px solid #eee;
+          padding-top: 10px;
+          margin-top: 3px;
+          color: #222;
+          font-size: 17px;
+          font-weight: 800;
+        }
+
+        /* VIEW */
+
+        .detail-grid {
+          display: grid;
+          grid-template-columns: repeat(2,minmax(0,1fr));
+          gap: 12px;
+          margin-bottom: 18px;
+        }
+
+        .detail-card {
+          background: #fbfcfe;
+          border: 1px solid #e9edf2;
+          border-radius: 12px;
+          padding: 15px;
+        }
+
+        .detail-label {
+          color: #8a95a6;
+          font-size: 11px;
+          text-transform: uppercase;
+          font-weight: 700;
+          letter-spacing: .55px;
+          margin-bottom: 5px;
+        }
+
+        .detail-value {
+          font-weight: 700;
+          color: #344054;
+          font-size: 14px;
+          line-height: 1.45;
+        }
+
+        .items-table {
+          width: 100%;
+          min-width: 0;
+        }
+
+        .items-table th,
+        .items-table td {
+          padding: 10px;
+        }
+
+        .section-box {
+          border-color: #e9edf2;
+          border-radius: 13px;
+        }
+
+        .section-box-title {
+          color: #344054;
+          letter-spacing: -.1px;
+        }
+
+        /* =====================================================
+           TIMELINE MODAL
+        ===================================================== */
+
+        .timeline-modal {
+          width: min(720px, 100%);
+          max-height: 82vh;
+        }
+
+        .timeline-header {
+          background:
+            linear-gradient(
+              135deg,
+              #fff9f2 0%,
+              #ffffff 65%
+            );
+        }
+
+        .timeline-order-summary {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-top: 8px;
+          flex-wrap: wrap;
+        }
+
+        .timeline-order-id {
+          font-weight: 800;
+          color: #222;
+        }
+
+        .timeline-current-badge {
+          display: inline-flex;
+          align-items: center;
+          padding: 5px 9px;
+          border-radius: 999px;
+          background: #fff0dc;
+          color: #d96f0b;
+          font-size: 11px;
+          font-weight: 800;
+        }
+
+        .timeline-status-panel {
+          background: #f9fafb;
+          border: 1px solid #e8eaed;
+          border-radius: 13px;
+          padding: 14px;
+          margin-bottom: 18px;
+        }
+
+        .timeline-status-panel-title {
+          font-size: 12px;
+          font-weight: 800;
+          color: #444;
+          margin-bottom: 9px;
+        }
+
+        .timeline-status-controls {
+          display: flex;
+          gap: 9px;
+          align-items: center;
+        }
+
+        .timeline-status-controls select {
+          flex: 1;
+          height: 42px;
+          border: 1px solid #d8d8d8;
+          border-radius: 9px;
+          background: white;
+          padding: 0 11px;
+          font-weight: 600;
+          outline: none;
+        }
+
+        .timeline-status-controls select:focus {
+          border-color: #f28c28;
+        }
+
+        .update-status-button {
+          height: 42px;
+          padding: 0 17px;
+          border: 0;
+          border-radius: 9px;
+          background: #f28c28;
+          color: white;
+          font-weight: 800;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+
+        .update-status-button:disabled {
+          opacity: .55;
+          cursor: not-allowed;
+        }
+
+        .timeline-error {
+          margin-top: 10px;
+          padding: 10px 12px;
+          border-radius: 8px;
+          background: #fff1f1;
+          border: 1px solid #ffd0d0;
+          color: #b42318;
+          font-size: 12px;
+        }
+
+        .timeline-scroll {
+          max-height: 440px;
+          overflow-y: auto;
+          padding: 4px 8px 4px 2px;
+        }
+
+        .timeline-scroll::-webkit-scrollbar {
+          width: 7px;
+        }
+
+        .timeline-scroll::-webkit-scrollbar-track {
+          background: #f5f5f5;
+          border-radius: 10px;
+        }
+
+        .timeline-scroll::-webkit-scrollbar-thumb {
+          background: #d4d4d4;
+          border-radius: 10px;
+        }
+
+        .timeline {
+          position: relative;
+          padding: 5px 5px 5px 3px;
+        }
+
+        .timeline::before {
+          content: "";
+          position: absolute;
+          left: 20px;
+          top: 21px;
+          bottom: 21px;
+          width: 2px;
+          background: #e6e6e6;
+        }
+
+        .timeline-item {
+          position: relative;
+          display: flex;
+          gap: 15px;
+          min-height: 77px;
+        }
+
+        .timeline-node {
+          position: relative;
+          z-index: 2;
+          width: 36px;
+          height: 36px;
+          min-width: 36px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 15px;
+          font-weight: 900;
+          border: 3px solid white;
+          box-shadow: 0 1px 4px rgba(0,0,0,.1);
+        }
+
+        .timeline-content {
+          flex: 1;
+          min-width: 0;
+          padding: 1px 0 19px;
+        }
+
+        .timeline-content-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+        }
+
+        .timeline-status-name {
+          font-size: 14px;
+          font-weight: 800;
+        }
+
+        .timeline-state {
+          font-size: 10px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: .5px;
+        }
+
+        .timeline-time {
+          color: #8b8b8b;
+          font-size: 11px;
+          margin-top: 3px;
+        }
+
+        .timeline-message {
+          margin-top: 6px;
+          color: #666;
+          font-size: 12px;
+          line-height: 1.45;
+          background: #fafafa;
+          border: 1px solid #eee;
+          border-radius: 7px;
+          padding: 7px 9px;
+        }
+
+        .timeline-not-reached {
+          color: #aaa;
+          font-size: 11px;
+          margin-top: 5px;
+          font-style: italic;
+        }
+
+        .timeline-item.completed .timeline-node {
+          color: white;
+        }
+
+        .timeline-item.current .timeline-node {
+          color: white;
+          box-shadow:
+            0 0 0 5px rgba(242,140,40,.12),
+            0 2px 7px rgba(0,0,0,.12);
+        }
+
+        .timeline-item.current
+          .timeline-status-name {
+          color: #d96f0b;
+        }
+
+        .timeline-item.future .timeline-node,
+        .timeline-item.not-recorded .timeline-node {
+          background: #f1f2f4;
+          color: #aaa;
+          box-shadow: none;
+        }
+
+        .timeline-item.future
+          .timeline-status-name,
+        .timeline-item.not-recorded
+          .timeline-status-name {
+          color: #999;
+        }
+
+        .timeline-current-label {
+          display: inline-flex;
+          margin-left: 7px;
+          background: #fff0dc;
+          color: #d96f0b;
+          padding: 3px 6px;
+          border-radius: 5px;
+          font-size: 9px;
+          text-transform: uppercase;
+          font-weight: 900;
+          vertical-align: middle;
+        }
+
+        .timeline-loading {
+          padding: 50px 20px;
+          text-align: center;
+          color: #888;
+        }
+
+        .timeline-empty {
+          padding: 14px;
+          border: 1px dashed #ddd;
+          border-radius: 9px;
+          color: #888;
+          text-align: center;
+          font-size: 12px;
+          margin-bottom: 12px;
+        }
+
+        .timeline-legend {
+          display: flex;
+          gap: 15px;
+          flex-wrap: wrap;
+          margin-top: 14px;
+          padding-top: 12px;
+          border-top: 1px solid #eee;
+          font-size: 11px;
+          color: #777;
+        }
+
+        .legend-item {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .legend-dot {
+          width: 9px;
+          height: 9px;
+          border-radius: 50%;
+          background: #16a34a;
+        }
+
+        .legend-dot.current {
+          background: #f28c28;
+        }
+
+        .legend-dot.pending {
+          background: #ddd;
+        }
+
+        @media (max-width: 750px) {
+          .orders-page {
+            padding: 22px 16px;
+          }
+
+          .orders-summary {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+          }
+
+          .summary-card {
+            min-height: 100px;
+            padding: 15px;
+          }
+
+          .summary-value {
+            font-size: 24px;
+          }
+
+          .toolbar {
+            align-items: stretch;
+          }
+
+          .search-box {
+            min-width: 100%;
+          }
+
+          .filter-group {
+            overflow-x: auto;
+            flex-wrap: nowrap;
+            padding-bottom: 2px;
+          }
+
+          .filter-button {
+            flex: 0 0 auto;
+          }
+
+          .page-header {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 16px;
+          }
+
+          .page-header .primary-button {
+            width: 100%;
+          }
+
+          .form-grid,
+          .detail-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .form-group.full {
+            grid-column: auto;
+          }
+
+          .timeline-modal {
+            max-height: 90vh;
+          }
+
+          .timeline-status-controls {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .timeline-scroll {
+            max-height: 45vh;
+          }
+
+          .table-heading {
+            padding: 16px;
+          }
+
+          .modal-overlay {
+            padding: 12px;
+          }
+
+          .modal-header,
+          .modal-body {
+            padding: 18px;
+          }
+
+          .modal-footer {
+            padding: 13px 18px;
+            flex-wrap: wrap;
+          }
+        }
+
+        @media (max-width: 420px) {
+          .orders-summary {
+            gap: 8px;
+          }
+
+          .summary-card {
+            padding: 13px 12px;
+          }
+
+          .summary-label {
+            font-size: 11px;
+          }
+
+          .summary-value {
+            font-size: 22px;
+          }
+
+          .table-description {
+            max-width: 210px;
+          }
+        }
+      `}</style>
+
+      <div className="orders-container">
+        {/* ===================================================
+            HEADER
+        =================================================== */}
+
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">
+              Orders
+            </h1>
+
+            <p className="page-subtitle">
+              Manage customer orders, delivery,
+              payment and order status.
+            </p>
+          </div>
 
           <button
-            onClick={() => setError("")}
-            style={{
-              float: "right",
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              fontWeight: "bold",
-            }}
+            className="primary-button"
+            onClick={openCreateModal}
           >
-            ×
+            + Create Order
           </button>
         </div>
-      )}
 
-      {/* FILTERS */}
-
-      <div style={cardStyle}>
-        <div
-          style={{
-            display: "flex",
-            gap: "8px",
-            flexWrap: "wrap",
-          }}
-        >
-          {[
-            "All",
-            "New",
-            "Processing",
-            "Delivery",
-            "Completed",
-            "Cancelled",
-          ].map((filter) => (
-            <button
-              key={filter}
-              onClick={() => setActiveFilter(filter)}
-              style={{
-                border:
-                  activeFilter === filter
-                    ? "1px solid #f28c28"
-                    : "1px solid #ddd",
-
-                background:
-                  activeFilter === filter
-                    ? "#f28c28"
-                    : "#fff",
-
-                color:
-                  activeFilter === filter
-                    ? "#fff"
-                    : "#555",
-
-                padding: "8px 15px",
-                borderRadius: "20px",
-                cursor: "pointer",
-                fontSize: "13px",
-              }}
-            >
-              {filter}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* ORDERS TABLE */}
-
-      <div style={cardStyle}>
-        {loading ? (
-          <div
-            style={{
-              padding: "30px",
-              textAlign: "center",
-              color: "#777",
-            }}
-          >
-            Loading orders...
+        <section className="orders-summary" aria-label="Order overview">
+          <div className="summary-card" style={{ "--summary-color": "#f28c28" }}>
+            <span className="summary-label">All orders</span>
+            <strong className="summary-value">
+              {loading ? "—" : orderSummary.total}
+            </strong>
+            <p className="summary-caption">Orders in your store</p>
           </div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: "14px",
-              }}
-            >
-              <thead>
-                <tr
-                  style={{
-                    background: "#f8f9fa",
-                    textAlign: "left",
-                  }}
-                >
-                  <th style={{ padding: "12px" }}>
-                    Order
-                  </th>
+          <div className="summary-card" style={{ "--summary-color": "#e4a11b" }}>
+            <span className="summary-label">Awaiting confirmation</span>
+            <strong className="summary-value">
+              {loading ? "—" : orderSummary.pending}
+            </strong>
+            <p className="summary-caption">New orders to review</p>
+          </div>
+          <div className="summary-card" style={{ "--summary-color": "#6778dc" }}>
+            <span className="summary-label">In progress</span>
+            <strong className="summary-value">
+              {loading ? "—" : orderSummary.inProgress}
+            </strong>
+            <p className="summary-caption">Being prepared or delivered</p>
+          </div>
+          <div className="summary-card" style={{ "--summary-color": "#2ea879" }}>
+            <span className="summary-label">Delivered</span>
+            <strong className="summary-value">
+              {loading ? "—" : orderSummary.delivered}
+            </strong>
+            <p className="summary-caption">Successfully completed</p>
+          </div>
+        </section>
 
-                  <th style={{ padding: "12px" }}>
-                    Customer
-                  </th>
+        {/* ===================================================
+            ALERTS
+        =================================================== */}
 
-                  <th style={{ padding: "12px" }}>
-                    Date
-                  </th>
-
-                  <th style={{ padding: "12px" }}>
-                    Delivery
-                  </th>
-
-                  <th style={{ padding: "12px" }}>
-                    Total
-                  </th>
-
-                  <th style={{ padding: "12px" }}>
-                    Status
-                  </th>
-
-                  <th style={{ padding: "12px" }}>
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {filteredOrders.map((order) => (
-                  <tr
-                    key={order._id}
-                    style={{
-                      borderBottom: "1px solid #eee",
-                    }}
-                  >
-                    <td style={{ padding: "12px" }}>
-                      <strong>
-                        #{order.orderNumber}
-                      </strong>
-                    </td>
-
-                    <td style={{ padding: "12px" }}>
-                      {getCustomerName(order)}
-                    </td>
-
-                    <td style={{ padding: "12px" }}>
-                      {formatDate(order.deliveryDate)}
-                    </td>
-
-                    <td style={{ padding: "12px" }}>
-                      {order.deliverySlotId?.startTime
-                        ? `${order.deliverySlotId.startTime} - ${order.deliverySlotId.endTime}`
-                        : "-"}
-                    </td>
-
-                    <td style={{ padding: "12px" }}>
-                      Rs. {Number(order.total || 0).toFixed(2)}
-                    </td>
-
-                    <td style={{ padding: "12px" }}>
-                      <span
-                        style={getStatusStyle(
-                          order.status
-                        )}
-                      >
-                        {order.status}
-                      </span>
-                    </td>
-
-                    <td style={{ padding: "12px" }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: "5px",
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        <button
-                          style={smallButtonStyle}
-                          onClick={() =>
-                            openViewModal(order)
-                          }
-                        >
-                          View
-                        </button>
-
-                        <button
-                          style={secondaryButtonStyle}
-                          onClick={() =>
-                            openEditModal(order)
-                          }
-                        >
-                          Edit
-                        </button>
-
-                        <button
-                          style={secondaryButtonStyle}
-                          onClick={() =>
-                            openTimelineModal(order)
-                          }
-                        >
-                          Timeline
-                        </button>
-
-                        <button
-                          style={dangerButtonStyle}
-                          onClick={() =>
-                            handleDelete(order._id)
-                          }
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-
-                {!filteredOrders.length && (
-                  <tr>
-                    <td
-                      colSpan="7"
-                      style={{
-                        padding: "30px",
-                        textAlign: "center",
-                        color: "#777",
-                      }}
-                    >
-                      No orders found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+        {error && (
+          <div className="alert alert-error">
+            {error}
           </div>
         )}
-      </div>
 
-      {/* ================================================= */}
-      {/* ADD / EDIT MODAL */}
-      {/* ================================================= */}
+        {message && (
+          <div className="alert alert-success">
+            {message}
+          </div>
+        )}
 
-      {showModal && (
-        <div style={modalOverlayStyle}>
-          <div style={modalStyle}>
-            {/* HEADER */}
+        {/* ===================================================
+            TOOLBAR
+        =================================================== */}
 
-            <div style={modalHeaderStyle}>
-              <h3 style={{ margin: 0 }}>
-                {editingId
-                  ? "Edit Order"
-                  : "Create Order"}
-              </h3>
+        <div className="toolbar">
+          <div className="search-box">
+            <input
+              type="text"
+              placeholder="Search order, customer, phone or status..."
+              value={search}
+              onChange={(e) =>
+                setSearch(e.target.value)
+              }
+            />
+          </div>
 
+          <div className="filter-group">
+            {[
+              "All",
+              "New",
+              "Processing",
+              "Delivery",
+              "Completed",
+              "Cancelled",
+            ].map((item) => (
               <button
-                style={closeButtonStyle}
-                onClick={() => setShowModal(false)}
+                key={item}
+                className={`filter-button ${
+                  filter === item
+                    ? "active"
+                    : ""
+                }`}
+                onClick={() =>
+                  setFilter(item)
+                }
               >
-                ×
+                {item}
               </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ===================================================
+            TABLE
+        =================================================== */}
+
+        <div className="table-card">
+          <div className="table-heading">
+            <div>
+              <h2 className="table-title">Order list</h2>
+              <p className="table-description">
+                Review customer details, delivery dates and order status.
+              </p>
             </div>
+            <span className="result-count">
+              {loading
+                ? "Loading"
+                : `${filteredOrders.length} ${filteredOrders.length === 1 ? "order" : "orders"}`}
+            </span>
+          </div>
 
-            {/* BODY */}
+          {loading ? (
+            <div className="loading">
+              Loading orders...
+            </div>
+          ) : filteredOrders.length === 0 ? (
+            <div className="empty-state">
+              <div
+                style={{
+                  fontSize: 38,
+                  marginBottom: 10,
+                }}
+              >
+                🛒
+              </div>
 
-            <form
-              onSubmit={handleSubmit}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                flex: 1,
-                minHeight: 0,
-              }}
-            >
-              <div style={modalBodyStyle}>
-                {/* CUSTOMER / ADDRESS */}
+              <strong>
+                No orders found
+              </strong>
 
-                <div style={cardStyle}>
-                  <h4
-                    style={{
-                      marginTop: 0,
-                      marginBottom: "15px",
-                    }}
-                  >
-                    Customer & Delivery Address
-                  </h4>
+              <div
+                style={{
+                  marginTop: 5,
+                  fontSize: 13,
+                }}
+              >
+                Try changing your search or
+                filter.
+              </div>
+            </div>
+          ) : (
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Order</th>
+                    <th>Customer</th>
+                    <th>Date</th>
+                    <th>Delivery</th>
+                    <th>Total</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
 
-                  <div style={gridStyle}>
-                    {/* CUSTOMER */}
+                <tbody>
+                  {filteredOrders.map(
+                    (order, index) => {
+                      const orderId =
+                        getOrderId(order);
 
-                    <div>
-                      <label style={labelStyle}>
-                        Customer *
-                      </label>
+                      const customerName =
+                        getCustomerName(
+                          order,
+                          customers
+                        );
 
-                      <select
-                        name="customerId"
-                        value={form.customerId}
-                        onChange={handleCustomerChange}
-                        style={inputStyle}
-                        required
-                      >
-                        <option value="">
-                          Select Customer
-                        </option>
+                      const customerPhone =
+                        getCustomerPhone(
+                          order,
+                          customers
+                        );
 
-                        {customers.map((customer) => (
-                          <option
-                            key={customer._id}
-                            value={customer._id}
-                          >
-                            {customer.firstName || ""}{" "}
-                            {customer.lastName || ""}{" "}
-                            {customer.phone
-                              ? `(${customer.phone})`
-                              : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                      const status =
+                        order.status ||
+                        "Pending";
 
-                    {/* ADDRESS */}
-
-                    <div>
-                      <label style={labelStyle}>
-                        Delivery Address *
-                      </label>
-
-                      <select
-                        value={form.addressId}
-                        onChange={handleAddressChange}
-                        style={inputStyle}
-                        required
-                        disabled={
-                          !form.customerId ||
-                          loadingAddresses
-                        }
-                      >
-                        <option value="">
-                          {loadingAddresses
-                            ? "Loading addresses..."
-                            : "Select Address"}
-                        </option>
-
-                        {customerAddresses.map(
-                          (address) => (
-                            <option
-                              key={address._id}
-                              value={address._id}
-                            >
-                              {address.label
-                                ? `${address.label} - `
-                                : ""}
-                              {address.address}
-                              {address.isDefault
-                                ? " (Default)"
-                                : ""}
-                            </option>
-                          )
-                        )}
-                      </select>
-
-                      {form.customerId &&
-                        !loadingAddresses &&
-                        customerAddresses.length ===
-                          0 && (
-                          <small
-                            style={{
-                              color: "#dc3545",
-                            }}
-                          >
-                            This customer has no
-                            saved address.
-                          </small>
-                        )}
-                    </div>
-                  </div>
-
-                  {/* SELECTED ADDRESS */}
-
-                  {form.addressId && (
-                    <div
-                      style={{
-                        marginTop: "15px",
-                        background: "#f8f9fa",
-                        padding: "12px",
-                        borderRadius: "6px",
-                        border: "1px solid #eee",
-                      }}
-                    >
-                      <strong>
-                        Selected Address:
-                      </strong>
-
-                      <div
-                        style={{
-                          marginTop: "5px",
-                          color: "#555",
-                        }}
-                      >
-                        {form.deliveryAddress}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* DELIVERY */}
-
-                <div style={cardStyle}>
-                  <h4
-                    style={{
-                      marginTop: 0,
-                      marginBottom: "15px",
-                    }}
-                  >
-                    Delivery
-                  </h4>
-
-                  <div style={gridStyle}>
-                    {/* DATE */}
-
-                    <div>
-                      <label style={labelStyle}>
-                        Delivery Date *
-                      </label>
-
-                      <input
-                        type="date"
-                        name="deliveryDate"
-                        value={form.deliveryDate}
-                        onChange={handleDateChange}
-                        style={inputStyle}
-                        required
-                      />
-                    </div>
-
-                    {/* SLOT */}
-
-                    <div>
-                      <label style={labelStyle}>
-                        Delivery Slot *
-                      </label>
-
-                      <select
-                        name="deliverySlotId"
-                        value={form.deliverySlotId}
-                        onChange={handleChange}
-                        style={inputStyle}
-                        required
-                        disabled={
-                          !form.deliveryDate ||
-                          loadingSlots
-                        }
-                      >
-                        <option value="">
-                          {loadingSlots
-                            ? "Loading slots..."
-                            : !form.deliveryDate
-                            ? "Select delivery date first"
-                            : "Select Delivery Slot"}
-                        </option>
-
-                        {deliverySlots.map((slot) => (
-                          <option
-                            key={slot._id}
-                            value={slot._id}
-                          >
-                            {slot.startTime} -{" "}
-                            {slot.endTime}
-                            {slot.capacity
-                              ? ` (${slot.capacity} orders)`
-                              : ""}
-                          </option>
-                        ))}
-                      </select>
-
-                      {form.deliveryDate &&
-                        !loadingSlots &&
-                        deliverySlots.length ===
-                          0 && (
-                          <small
-                            style={{
-                              color: "#dc3545",
-                            }}
-                          >
-                            No delivery slots available
-                            for this date.
-                          </small>
-                        )}
-                    </div>
-                  </div>
-
-                  {/* SLOT INFO */}
-
-                  {form.deliverySlotId && (
-                    <div
-                      style={{
-                        marginTop: "15px",
-                        padding: "12px",
-                        background: "#fff8ef",
-                        border: "1px solid #f28c28",
-                        borderRadius: "6px",
-                      }}
-                    >
-                      {(() => {
-                        const slot =
-                          deliverySlots.find(
-                            (x) =>
-                              x._id ===
-                              form.deliverySlotId
-                          );
-
-                        if (!slot) {
-                          return null;
-                        }
-
-                        return (
-                          <>
-                            <strong>
-                              Selected Delivery Slot
-                            </strong>
+                      return (
+                        <tr
+                          key={
+                            orderId ||
+                            `order-${index}`
+                          }
+                        >
+                          <td>
+                            <div className="order-id">
+                              #
+                              {orderId ||
+                                "N/A"}
+                            </div>
 
                             <div
                               style={{
-                                marginTop: "5px",
+                                color: "#999",
+                                fontSize: 11,
+                                marginTop: 3,
                               }}
                             >
-                              {slot.startTime} -{" "}
-                              {slot.endTime}
+                              {order.items
+                                ?.length ||
+                                0}{" "}
+                              item(s)
+                            </div>
+                          </td>
+
+                          <td>
+                            <div className="customer-name">
+                              {
+                                customerName
+                              }
                             </div>
 
-                            {slot.capacity && (
-                              <div
-                                style={{
-                                  marginTop: "3px",
-                                  fontSize: "13px",
-                                  color: "#777",
-                                }}
-                              >
-                                Capacity:{" "}
-                                {slot.capacity}
+                            {customerPhone && (
+                              <div className="customer-phone">
+                                {
+                                  customerPhone
+                                }
                               </div>
                             )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                  )}
-                </div>
-
-                {/* ORDER ITEMS */}
-
-                <div style={cardStyle}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent:
-                        "space-between",
-                      alignItems: "center",
-                      marginBottom: "15px",
-                    }}
-                  >
-                    <h4
-                      style={{
-                        margin: 0,
-                      }}
-                    >
-                      Order Items
-                    </h4>
-
-                    <button
-                      type="button"
-                      style={buttonStyle}
-                      onClick={addItem}
-                    >
-                      + Add Item
-                    </button>
-                  </div>
-
-                  {form.items.length === 0 ? (
-                    <div
-                      style={{
-                        padding: "20px",
-                        textAlign: "center",
-                        background: "#f8f9fa",
-                        color: "#777",
-                        borderRadius: "6px",
-                      }}
-                    >
-                      No items added.
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        overflowX: "auto",
-                      }}
-                    >
-                      <table
-                        style={{
-                          width: "100%",
-                          borderCollapse:
-                            "collapse",
-                          minWidth: "750px",
-                        }}
-                      >
-                        <thead>
-                          <tr
-                            style={{
-                              background:
-                                "#f8f9fa",
-                            }}
-                          >
-                            <th
-                              style={{
-                                padding: "10px",
-                                textAlign:
-                                  "left",
-                              }}
-                            >
-                              Product ID
-                            </th>
-
-                            <th
-                              style={{
-                                padding: "10px",
-                                textAlign:
-                                  "left",
-                              }}
-                            >
-                              Product Name
-                            </th>
-
-                            <th
-                              style={{
-                                padding: "10px",
-                                textAlign:
-                                  "left",
-                              }}
-                            >
-                              Qty
-                            </th>
-
-                            <th
-                              style={{
-                                padding: "10px",
-                                textAlign:
-                                  "left",
-                              }}
-                            >
-                              Unit Price
-                            </th>
-
-                            <th
-                              style={{
-                                padding: "10px",
-                                textAlign:
-                                  "left",
-                              }}
-                            >
-                              Deal ID
-                            </th>
-
-                            <th
-                              style={{
-                                padding: "10px",
-                              }}
-                            >
-                              Total
-                            </th>
-
-                            <th
-                              style={{
-                                padding: "10px",
-                              }}
-                            >
-                              Action
-                            </th>
-                          </tr>
-                        </thead>
-
-                        <tbody>
-                          {form.items.map(
-                            (item, index) => (
-                              <tr
-                                key={index}
-                                style={{
-                                  borderBottom:
-                                    "1px solid #eee",
-                                }}
-                              >
-                                <td
-                                  style={{
-                                    padding:
-                                      "8px",
-                                  }}
-                                >
-                                  <input
-                                    value={
-                                      item.productId ||
-                                      ""
-                                    }
-                                    onChange={(e) =>
-                                      updateItem(
-                                        index,
-                                        "productId",
-                                        e.target
-                                          .value
-                                    )
-                                    }
-                                    style={{
-                                      ...inputStyle,
-                                      margin: 0,
-                                    }}
-                                    placeholder="Product ID"
-                                    required
-                                  />
-                                </td>
-
-                                <td
-                                  style={{
-                                    padding:
-                                      "8px",
-                                  }}
-                                >
-                                  <input
-                                    value={
-                                      item.productName ||
-                                      ""
-                                    }
-                                    onChange={(e) =>
-                                      updateItem(
-                                        index,
-                                        "productName",
-                                        e.target
-                                          .value
-                                    )
-                                    }
-                                    style={{
-                                      ...inputStyle,
-                                      margin: 0,
-                                    }}
-                                    placeholder="Product name"
-                                    required
-                                  />
-                                </td>
-
-                                <td
-                                  style={{
-                                    padding:
-                                      "8px",
-                                  }}
-                                >
-                                  <input
-                                    type="number"
-                                    min="1"
-                                    value={
-                                      item.quantity
-                                    }
-                                    onChange={(e) =>
-                                      updateItem(
-                                        index,
-                                        "quantity",
-                                        Number(
-                                          e.target
-                                            .value
-                                        )
-                                      )
-                                    }
-                                    style={{
-                                      ...inputStyle,
-                                      margin: 0,
-                                      width: "80px",
-                                    }}
-                                  />
-                                </td>
-
-                                <td
-                                  style={{
-                                    padding:
-                                      "8px",
-                                  }}
-                                >
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    value={
-                                      item.unitPrice
-                                    }
-                                    onChange={(e) =>
-                                      updateItem(
-                                        index,
-                                        "unitPrice",
-                                        Number(
-                                          e.target
-                                            .value
-                                        )
-                                      )
-                                    }
-                                    style={{
-                                      ...inputStyle,
-                                      margin: 0,
-                                      width: "110px",
-                                    }}
-                                  />
-                                </td>
-
-                                <td
-                                  style={{
-                                    padding:
-                                      "8px",
-                                  }}
-                                >
-                                  <input
-                                    value={
-                                      item.dealId ||
-                                      ""
-                                    }
-                                    onChange={(e) =>
-                                      updateItem(
-                                        index,
-                                        "dealId",
-                                        e.target
-                                          .value
-                                    )
-                                    }
-                                    style={{
-                                      ...inputStyle,
-                                      margin: 0,
-                                    }}
-                                    placeholder="Optional"
-                                  />
-                                </td>
-
-                                <td
-                                  style={{
-                                    padding:
-                                      "8px",
-                                    whiteSpace:
-                                      "nowrap",
-                                  }}
-                                >
-                                  Rs.{" "}
-                                  {(
-                                    Number(
-                                      item.quantity ||
-                                        0
-                                    ) *
-                                    Number(
-                                      item.unitPrice ||
-                                        0
-                                    )
-                                  ).toFixed(2)}
-                                </td>
-
-                                <td
-                                  style={{
-                                    padding:
-                                      "8px",
-                                  }}
-                                >
-                                  <button
-                                    type="button"
-                                    style={
-                                      dangerButtonStyle
-                                    }
-                                    onClick={() =>
-                                      removeItem(
-                                        index
-                                      )
-                                    }
-                                  >
-                                    Remove
-                                  </button>
-                                </td>
-                              </tr>
-                            )
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  {/* SUBTOTAL */}
-
-                  <div
-                    style={{
-                      marginTop: "15px",
-                      textAlign: "right",
-                    }}
-                  >
-                    <strong>
-                      Subtotal: Rs.{" "}
-                      {calculateSubtotal().toFixed(
-                        2
-                      )}
-                    </strong>
-                  </div>
-                </div>
-
-                {/* PAYMENT */}
-
-                <div style={cardStyle}>
-                  <h4
-                    style={{
-                      marginTop: 0,
-                      marginBottom: "15px",
-                    }}
-                  >
-                    Payment & Charges
-                  </h4>
-
-                  <div style={gridStyle}>
-                    {/* PAYMENT METHOD */}
-
-                    <div>
-                      <label style={labelStyle}>
-                        Payment Method
-                      </label>
-
-                      <select
-                        name="paymentMethod"
-                        value={form.paymentMethod}
-                        onChange={handleChange}
-                        style={inputStyle}
-                      >
-                        <option value="Cash on Delivery">
-                          Cash on Delivery
-                        </option>
-
-                        <option value="Online">
-                          Online
-                        </option>
-                      </select>
-                    </div>
-
-                    {/* PAYMENT STATUS */}
-
-                    <div>
-                      <label style={labelStyle}>
-                        Payment Status
-                      </label>
-
-                      <select
-                        name="paymentStatus"
-                        value={form.paymentStatus}
-                        onChange={handleChange}
-                        style={inputStyle}
-                      >
-                        <option value="Pending">
-                          Pending
-                        </option>
-
-                        <option value="Paid">
-                          Paid
-                        </option>
-
-                        <option value="Failed">
-                          Failed
-                        </option>
-
-                        <option value="Refunded">
-                          Refunded
-                        </option>
-                      </select>
-                    </div>
-
-                    {/* DELIVERY FEE */}
-
-                    <div>
-                      <label style={labelStyle}>
-                        Delivery Fee
-                      </label>
-
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        name="deliveryFee"
-                        value={form.deliveryFee}
-                        onChange={handleChange}
-                        style={inputStyle}
-                      />
-                    </div>
-
-                    {/* DISCOUNT */}
-
-                    <div>
-                      <label style={labelStyle}>
-                        Discount
-                      </label>
-
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        name="discount"
-                        value={form.discount}
-                        onChange={handleChange}
-                        style={inputStyle}
-                      />
-                    </div>
-                  </div>
-
-                  {/* TOTAL */}
-
-                  <div
-                    style={{
-                      marginTop: "15px",
-                      padding: "15px",
-                      background: "#fff8ef",
-                      borderRadius: "6px",
-                      textAlign: "right",
-                      fontSize: "18px",
-                    }}
-                  >
-                    <strong>
-                      Grand Total: Rs.{" "}
-                      {calculateTotal().toFixed(2)}
-                    </strong>
-                  </div>
-                </div>
-
-                {/* STATUS / NOTES */}
-
-                <div style={cardStyle}>
-                  <h4
-                    style={{
-                      marginTop: 0,
-                      marginBottom: "15px",
-                    }}
-                  >
-                    Order Information
-                  </h4>
-
-                  <div style={gridStyle}>
-                    <div>
-                      <label style={labelStyle}>
-                        Order Status
-                      </label>
-
-                      <select
-                        name="status"
-                        value={form.status}
-                        onChange={handleChange}
-                        style={inputStyle}
-                      >
-                        <option value="Pending">
-                          Pending
-                        </option>
-
-                        <option value="Confirmed">
-                          Confirmed
-                        </option>
-
-                        <option value="Preparing">
-                          Preparing
-                        </option>
-
-                        <option value="Ready">
-                          Ready
-                        </option>
-
-                        <option value="Out for Delivery">
-                          Out for Delivery
-                        </option>
-
-                        <option value="Delivered">
-                          Delivered
-                        </option>
-
-                        <option value="Cancelled">
-                          Cancelled
-                        </option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label style={labelStyle}>
-                        Notes
-                      </label>
-
-                      <textarea
-                        name="notes"
-                        value={form.notes}
-                        onChange={handleChange}
-                        style={{
-                          ...inputStyle,
-                          minHeight: "90px",
-                          resize: "vertical",
-                        }}
-                        placeholder="Order notes..."
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* FOOTER */}
-
-              <div style={modalFooterStyle}>
-                <button
-                  type="button"
-                  style={secondaryButtonStyle}
-                  onClick={() =>
-                    setShowModal(false)
-                  }
-                >
-                  Cancel
-                </button>
-
-                <button
-                  type="submit"
-                  style={buttonStyle}
-                >
-                  {editingId
-                    ? "Update Order"
-                    : "Create Order"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ================================================= */}
-      {/* VIEW ORDER MODAL */}
-      {/* ================================================= */}
-
-      {showViewModal && selectedOrder && (
-        <div style={modalOverlayStyle}>
-          <div
-            style={{
-              ...modalStyle,
-              maxWidth: "850px",
-            }}
-          >
-            <div style={modalHeaderStyle}>
-              <div>
-                <h3 style={{ margin: 0 }}>
-                  Order #
-                  {selectedOrder.orderNumber}
-                </h3>
-
-                <div
-                  style={{
-                    marginTop: "5px",
-                    fontSize: "13px",
-                    color: "#777",
-                  }}
-                >
-                  {formatDate(
-                    selectedOrder.createdAt
-                  )}
-                </div>
-              </div>
-
-              <button
-                style={closeButtonStyle}
-                onClick={() =>
-                  setShowViewModal(false)
-                }
-              >
-                ×
-              </button>
-            </div>
-
-            <div style={modalBodyStyle}>
-              {/* CUSTOMER */}
-
-              <div style={cardStyle}>
-                <h4 style={{ marginTop: 0 }}>
-                  Customer
-                </h4>
-
-                <div style={gridStyle}>
-                  <div>
-                    <strong>Name</strong>
-
-                    <div>
-                      {getCustomerName(
-                        selectedOrder
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <strong>Phone</strong>
-
-                    <div>
-                      {selectedOrder.customerId
-                        ?.phone || "-"}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* ADDRESS */}
-
-              <div style={cardStyle}>
-                <h4 style={{ marginTop: 0 }}>
-                  Delivery Information
-                </h4>
-
-                <div>
-                  <strong>Address</strong>
-
-                  <div
-                    style={{
-                      marginTop: "5px",
-                    }}
-                  >
-                    {
-                      selectedOrder
-                        .deliveryAddress?.address
-                    }
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    marginTop: "15px",
-                    display: "flex",
-                    gap: "30px",
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <div>
-                    <strong>Date</strong>
-
-                    <div>
-                      {formatDate(
-                        selectedOrder.deliveryDate
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <strong>Slot</strong>
-
-                    <div>
-                      {selectedOrder
-                        .deliverySlotId
-                        ?.startTime || "-"}{" "}
-                      -{" "}
-                      {selectedOrder
-                        .deliverySlotId?.endTime ||
-                        "-"}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* ITEMS */}
-
-              <div style={cardStyle}>
-                <h4 style={{ marginTop: 0 }}>
-                  Order Items
-                </h4>
-
-                <div
-                  style={{
-                    overflowX: "auto",
-                  }}
-                >
-                  <table
-                    style={{
-                      width: "100%",
-                      borderCollapse:
-                        "collapse",
-                    }}
-                  >
-                    <thead>
-                      <tr
-                        style={{
-                          background: "#f8f9fa",
-                        }}
-                      >
-                        <th
-                          style={{
-                            padding: "10px",
-                            textAlign:
-                              "left",
-                          }}
-                        >
-                          Product
-                        </th>
-
-                        <th
-                          style={{
-                            padding: "10px",
-                          }}
-                        >
-                          Qty
-                        </th>
-
-                        <th
-                          style={{
-                            padding: "10px",
-                          }}
-                        >
-                          Price
-                        </th>
-
-                        <th
-                          style={{
-                            padding: "10px",
-                          }}
-                        >
-                          Total
-                        </th>
-                      </tr>
-                    </thead>
-
-                    <tbody>
-                      {(selectedOrder.items ||
-                        []).map((item, index) => (
-                        <tr key={index}>
-                          <td
-                            style={{
-                              padding: "10px",
-                            }}
-                          >
-                            {item.productName}
-
-                            {item.dealItem && (
-                              <span
-                                style={{
-                                  marginLeft:
-                                    "7px",
-                                  fontSize:
-                                    "11px",
-                                  background:
-                                    "#fff3cd",
-                                  padding:
-                                    "3px 6px",
-                                  borderRadius:
-                                    "4px",
-                                }}
-                              >
-                                Deal
-                              </span>
+                          </td>
+
+                          <td>
+                            {formatDate(
+                              order.createdAt ||
+                                order.orderDate ||
+                                order.deliveryDate
                             )}
                           </td>
 
-                          <td
-                            style={{
-                              padding: "10px",
-                              textAlign:
-                                "center",
-                            }}
-                          >
-                            {item.quantity}
+                          <td>
+                            <div>
+                              {formatDate(
+                                order.deliveryDate
+                              )}
+                            </div>
+
+                            <div
+                              style={{
+                                color: "#999",
+                                fontSize: 11,
+                                marginTop: 3,
+                              }}
+                            >
+                              {order.deliverySlot
+                                ?.name ||
+                                order.deliverySlotName ||
+                                ""}
+                            </div>
                           </td>
 
-                          <td
-                            style={{
-                              padding: "10px",
-                              textAlign:
-                                "center",
-                            }}
-                          >
-                            Rs.{" "}
-                            {Number(
-                              item.unitPrice ||
-                                0
-                            ).toFixed(2)}
+                          <td>
+                            <strong>
+                              Rs.{" "}
+                              {getOrderTotal(
+                                order
+                              ).toLocaleString()}
+                            </strong>
                           </td>
 
-                          <td
-                            style={{
-                              padding: "10px",
-                              textAlign:
-                                "center",
-                            }}
-                          >
-                            Rs.{" "}
-                            {Number(
-                              item.total ||
-                                item.quantity *
-                                  item.unitPrice ||
-                                0
-                            ).toFixed(2)}
+                          <td>
+                            {/* <select
+                              className="status-select"
+                              value={status}
+                              onChange={(e) =>
+                                handleStatusChange(
+                                  order,
+                                  e.target.value
+                                )
+                              }
+                            >
+                              {STATUS_FLOW.map(
+                                (item) => (
+                                  <option
+                                    key={item}
+                                    value={
+                                      item
+                                    }
+                                  >
+                                    {item}
+                                  </option>
+                                )
+                              )}
+                            </select> */}
+                            {status}
+                          </td>
+
+                          <td>
+                            <div className="actions">
+                              <button
+                                className="action-button"
+                                onClick={() =>
+                                  openViewModal(
+                                    order
+                                  )
+                                }
+                              >
+                                View
+                              </button>
+
+                              <button
+                                className="action-button"
+                                onClick={() =>
+                                  openEditModal(
+                                    order
+                                  )
+                                }
+                              >
+                                Edit
+                              </button>
+
+                              <button
+                                className="action-button timeline"
+                                onClick={() =>
+                                  openTimelineModal(
+                                    order
+                                  )
+                                }
+                              >
+                                Timeline
+                              </button>
+
+                              <button
+                                className="action-button danger"
+                                onClick={() =>
+                                  deleteOrder(
+                                    order
+                                  )
+                                }
+                                disabled={
+                                  deleting
+                                }
+                              >
+                                Delete
+                              </button>
+                            </div>
                           </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* TOTAL */}
-
-              <div style={cardStyle}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent:
-                      "flex-end",
-                  }}
-                >
-                  <div
-                    style={{
-                      minWidth: "250px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent:
-                          "space-between",
-                        padding: "6px 0",
-                      }}
-                    >
-                      <span>
-                        Subtotal
-                      </span>
-
-                      <strong>
-                        Rs.{" "}
-                        {Number(
-                          selectedOrder.subtotal ||
-                            0
-                        ).toFixed(2)}
-                      </strong>
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent:
-                          "space-between",
-                        padding: "6px 0",
-                      }}
-                    >
-                      <span>
-                        Discount
-                      </span>
-
-                      <strong>
-                        - Rs.{" "}
-                        {Number(
-                          selectedOrder.discount ||
-                            0
-                        ).toFixed(2)}
-                      </strong>
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent:
-                          "space-between",
-                        padding: "6px 0",
-                      }}
-                    >
-                      <span>
-                        Delivery
-                      </span>
-
-                      <strong>
-                        Rs.{" "}
-                        {Number(
-                          selectedOrder.deliveryFee ||
-                            0
-                        ).toFixed(2)}
-                      </strong>
-                    </div>
-
-                    <hr />
-
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent:
-                          "space-between",
-                        padding: "8px 0",
-                        fontSize: "18px",
-                      }}
-                    >
-                      <strong>
-                        Total
-                      </strong>
-
-                      <strong>
-                        Rs.{" "}
-                        {Number(
-                          selectedOrder.total ||
-                            0
-                        ).toFixed(2)}
-                      </strong>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* STATUS */}
-
-              <div style={cardStyle}>
-                <h4 style={{ marginTop: 0 }}>
-                  Update Status
-                </h4>
-
-                <select
-                  value={selectedOrder.status}
-                  onChange={(e) =>
-                    handleStatusChange(
-                      selectedOrder,
-                      e.target.value
-                    )
-                  }
-                  style={inputStyle}
-                >
-                  <option value="Pending">
-                    Pending
-                  </option>
-
-                  <option value="Confirmed">
-                    Confirmed
-                  </option>
-
-                  <option value="Preparing">
-                    Preparing
-                  </option>
-
-                  <option value="Ready">
-                    Ready
-                  </option>
-
-                  <option value="Out for Delivery">
-                    Out for Delivery
-                  </option>
-
-                  <option value="Delivered">
-                    Delivered
-                  </option>
-
-                  <option value="Cancelled">
-                    Cancelled
-                  </option>
-                </select>
-              </div>
+                      );
+                    }
+                  )}
+                </tbody>
+              </table>
             </div>
-
-            <div style={modalFooterStyle}>
-              <button
-                style={secondaryButtonStyle}
-                onClick={() =>
-                  setShowViewModal(false)
-                }
-              >
-                Close
-              </button>
-            </div>
-          </div>
+          )}
         </div>
-      )}
+      </div>
 
-      {/* ================================================= */}
-      {/* TIMELINE MODAL */}
-      {/* ================================================= */}
+      {/* =====================================================
+          CREATE / EDIT MODAL
+      ===================================================== */}
 
-     {showTimelineModal && selectedOrder && (
-  <div style={modalOverlayStyle}>
-    <div
-      style={{
-        ...modalStyle,
-        maxWidth: "700px",
-        width: "95%",
-      }}
+   {showFormModal && (
+  <div className="modal-overlay">
+    <form
+      className="order-form-modal"
+      onSubmit={saveOrder}
     >
-      {/* Header */}
-      <div style={modalHeaderStyle}>
-        <div>
-          <h3 style={{ margin: 0 }}>
-            Order Timeline
-          </h3>
+      {/* =====================================================
+          HEADER
+      ===================================================== */}
+      <div className="order-modal-header">
+        <div className="order-modal-heading">
+          <div className="order-modal-icon">
+            {editingId ? "✎" : "+"}
+          </div>
 
-          <div
-            style={{
-              marginTop: "5px",
-              fontSize: "13px",
-              color: "#777",
-            }}
-          >
-            Order #{selectedOrder.orderNumber}
+          <div>
+            <div className="order-modal-eyebrow">
+              {editingId
+                ? "ORDER MANAGEMENT"
+                : "NEW ORDER"}
+            </div>
+
+            <h2>
+              {editingId
+                ? "Edit Order"
+                : "Create Order"}
+            </h2>
+
+            <p>
+              {editingId
+                ? "Update customer, delivery and payment information."
+                : "Create a new customer order and add its products."}
+            </p>
           </div>
         </div>
 
         <button
-          style={closeButtonStyle}
-          onClick={() => setShowTimelineModal(false)}
+          type="button"
+          className="order-modal-close"
+          onClick={() =>
+            setShowFormModal(false)
+          }
+          aria-label="Close"
         >
           ×
         </button>
       </div>
 
-      {/* Body */}
-      <div
-        style={{
-          ...modalBodyStyle,
-          padding: "25px 30px",
-          maxHeight: "550px",
-          overflowY: "auto",
-        }}
-      >
-        {timeline.length === 0 ? (
-          <div
-            style={{
-              padding: "40px 20px",
-              textAlign: "center",
-              color: "#777",
-            }}
-          >
-            No timeline entries found.
+      {/* =====================================================
+          BODY
+      ===================================================== */}
+      <div className="order-modal-body">
+        {error && (
+          <div className="order-form-error">
+            <div className="order-error-icon">
+              !
+            </div>
+
+            <div>
+              <strong>Unable to save order</strong>
+              <p>{error}</p>
+            </div>
           </div>
-        ) : (
-          <div style={{ position: "relative" }}>
-            {/* Vertical timeline line */}
-            <div
-              style={{
-                position: "absolute",
-                left: "19px",
-                top: "12px",
-                bottom: "12px",
-                width: "2px",
-                background: "#e5e5e5",
-              }}
-            />
+        )}
 
-            {timeline.map((entry, index) => {
-              const isLast = index === timeline.length - 1;
+        {/* ===================================================
+            CUSTOMER & DELIVERY
+        =================================================== */}
+        <section className="order-form-section">
+          <div className="order-section-header">
+            <div className="order-section-number">
+              01
+            </div>
 
-              const statusText = (entry.status || "")
-                .replace(/_/g, " ")
-                .replace(/\b\w/g, (char) =>
-                  char.toUpperCase()
-                );
+            <div>
+              <h3>Customer & Delivery</h3>
+              <p>
+                Select the customer and enter delivery
+                information.
+              </p>
+            </div>
+          </div>
 
-              return (
-                <div
-                  key={entry._id || index}
-                  style={{
-                    position: "relative",
-                    display: "flex",
-                    gap: "18px",
-                    marginBottom: isLast ? 0 : "28px",
-                  }}
-                >
-                  {/* Timeline circle */}
-                  <div
-                    style={{
-                      position: "relative",
-                      zIndex: 2,
-                      width: "40px",
-                      height: "40px",
-                      borderRadius: "50%",
-                      background: isLast
-                        ? "#f28c28"
-                        : "#fff",
-                      border: isLast
-                        ? "3px solid #f28c28"
-                        : "3px solid #f28c28",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
-                      boxSizing: "border-box",
-                    }}
+          <div className="order-form-grid">
+            <div className="order-form-group">
+              <label>
+                Customer
+                <span>*</span>
+              </label>
+
+              <select
+                className="order-form-control"
+                value={form.customerId}
+                onChange={(e) =>
+                  updateForm(
+                    "customerId",
+                    e.target.value
+                  )
+                }
+                required
+              >
+                <option value="">
+                  Select customer
+                </option>
+
+                {customers.map((customer) => (
+                  <option
+                    key={getId(customer)}
+                    value={getId(customer)}
                   >
-                    {isLast ? (
-                      <span
-                        style={{
-                          color: "#fff",
-                          fontSize: "18px",
-                          fontWeight: "700",
-                        }}
-                      >
-                        ✓
-                      </span>
-                    ) : (
-                      <span
-                        style={{
-                          width: "10px",
-                          height: "10px",
-                          borderRadius: "50%",
-                          background: "#f28c28",
-                        }}
-                      />
+                    {customer.name || "Customer"}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="order-form-group">
+              <label>Address ID</label>
+
+              <input
+                className="order-form-control"
+                value={form.addressId}
+                onChange={(e) =>
+                  updateForm(
+                    "addressId",
+                    e.target.value
+                  )
+                }
+                placeholder="Enter address ID"
+              />
+            </div>
+
+            <div className="order-form-group order-form-full">
+              <label>Delivery Address</label>
+
+              <input
+                className="order-form-control"
+                value={form.deliveryAddress}
+                onChange={(e) =>
+                {
+                  var f=form
+                  debugger
+                  updateForm(
+                    "deliveryAddress",
+                    e.target.value
+                  )
+                }}  
+                placeholder="Enter complete delivery address"
+              />
+            </div>
+
+            <div className="order-form-group">
+              <label>Delivery Date</label>
+
+              <div className="order-input-with-icon">
+                <span>📅</span>
+
+                <input
+                  type="date"
+                  className="order-form-control"
+                  value={form.deliveryDate}
+                  onChange={(e) =>
+                    updateForm(
+                      "deliveryDate",
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="order-form-group">
+              <label>Delivery Slot ID</label>
+
+              <input
+                className="order-form-control"
+                value={form.deliverySlotId}
+                onChange={(e) =>
+                  updateForm(
+                    "deliverySlotId",
+                    e.target.value
+                  )
+                }
+                placeholder="Enter delivery slot ID"
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* ===================================================
+            ORDER ITEMS
+        =================================================== */}
+        <section className="order-form-section">
+          <div className="order-section-header order-items-header">
+            <div className="order-section-number">
+              02
+            </div>
+
+            <div className="order-section-title-wrap">
+              <div>
+                <h3>Order Items</h3>
+                <p>
+                  Add the products included in this order.
+                </p>
+              </div>
+
+              <span className="order-items-count">
+                {form.items.length}{" "}
+                {form.items.length === 1
+                  ? "Item"
+                  : "Items"}
+              </span>
+            </div>
+          </div>
+
+          {form.items.length === 0 ? (
+            <div className="order-items-empty">
+              <div className="order-items-empty-icon">
+                🛒
+              </div>
+
+              <strong>No products added</strong>
+
+              <p>
+                Add products to build this order.
+              </p>
+
+              <button
+                type="button"
+                className="order-add-first-item"
+                onClick={addItem}
+              >
+                + Add Product
+              </button>
+            </div>
+          ) : (
+            <div className="order-items-list">
+              {form.items.map((item, index) => (
+                <div
+                  className="order-item-card"
+                  key={index}
+                >
+                  <div className="order-item-number">
+                    {String(index + 1).padStart(
+                      2,
+                      "0"
                     )}
                   </div>
 
-                  {/* Timeline content */}
-                  <div
-                    style={{
-                      flex: 1,
-                      background: "#fafafa",
-                      border: "1px solid #eee",
-                      borderRadius: "10px",
-                      padding: "15px 18px",
-                      marginTop: "-2px",
-                    }}
-                  >
-                    {/* Status + Date */}
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "flex-start",
-                        gap: "15px",
-                      }}
-                    >
-                      <div>
-                        <div
-                          style={{
-                            fontSize: "16px",
-                            fontWeight: "700",
-                            color: "#333",
-                          }}
-                        >
-                          {entry.title || statusText}
-                        </div>
+                  <div className="order-item-product">
+                    <label>Product</label>
 
-                        {entry.title && (
-                          <div
-                            style={{
-                              marginTop: "3px",
-                              fontSize: "12px",
-                              color: "#888",
+                    <input
+                      className="order-form-control"
+                      placeholder="Product ID / name"
+                      value={
+                        item.productName ||
+                        item.productId
+                      }
+                      onChange={(e) =>
+                        updateItem(
+                          index,
+                          "productName",
+                          e.target.value
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div className="order-item-qty">
+                    <label>Quantity</label>
+
+                    <input
+                      className="order-form-control"
+                      type="number"
+                      min="1"
+                      value={item.quantity}
+                      onChange={(e) =>
+                        updateItem(
+                          index,
+                          "quantity",
+                          Number(
+                            e.target.value
+                          )
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div className="order-item-price">
+                    <label>Unit Price</label>
+
+                    <div className="price-input">
+                      <span>Rs.</span>
+
+                      <input
+                        className="order-form-control"
+                        type="number"
+                        min="0"
+                        value={item.unitPrice}
+                        onChange={(e) =>
+                          updateItem(
+                            index,
+                            "unitPrice",
+                            Number(
+                              e.target.value
+                            )
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="order-item-subtotal">
+                    <label>Subtotal</label>
+
+                    <strong>
+                      Rs.{" "}
+                      {(
+                        Number(
+                          item.quantity || 0
+                        ) *
+                        Number(
+                          item.unitPrice || 0
+                        )
+                      ).toLocaleString()}
+                    </strong>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="order-remove-item"
+                    onClick={() =>
+                      removeItem(index)
+                    }
+                    title="Remove item"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {form.items.length > 0 && (
+            <button
+              type="button"
+              className="order-add-item-btn"
+              onClick={addItem}
+            >
+              <span>+</span>
+              Add Another Product
+            </button>
+          )}
+        </section>
+
+        {/* ===================================================
+            PAYMENT
+        =================================================== */}
+        <section className="order-form-section">
+          <div className="order-section-header">
+            <div className="order-section-number">
+              03
+            </div>
+
+            <div>
+              <h3>Payment & Charges</h3>
+              <p>
+                Configure payment, delivery charges and
+                order status.
+              </p>
+            </div>
+          </div>
+
+          <div className="order-form-grid">
+            <div className="order-form-group">
+              <label>Payment Method</label>
+
+              <select
+                className="order-form-control"
+                value={form.paymentMethod}
+                onChange={(e) =>
+                  updateForm(
+                    "paymentMethod",
+                    e.target.value
+                  )
+                }
+              >
+                <option>
+                  Cash on Delivery
+                </option>
+
+                <option>Online</option>
+
+                <option>
+                  Bank Transfer
+                </option>
+              </select>
+            </div>
+
+            <div className="order-form-group">
+              <label>Payment Status</label>
+
+              <select
+                className="order-form-control"
+                value={form.paymentStatus}
+                onChange={(e) =>
+                  updateForm(
+                    "paymentStatus",
+                    e.target.value
+                  )
+                }
+              >
+                <option>Pending</option>
+                <option>Paid</option>
+                <option>Failed</option>
+                <option>Refunded</option>
+              </select>
+            </div>
+
+            <div className="order-form-group">
+              <label>Delivery Fee</label>
+
+              <div className="currency-input">
+                <span>Rs.</span>
+
+                <input
+                  type="number"
+                  min="0"
+                  className="order-form-control"
+                  value={form.deliveryFee}
+                  onChange={(e) =>
+                    updateForm(
+                      "deliveryFee",
+                      Number(
+                        e.target.value
+                      )
+                    )
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="order-form-group">
+              <label>Discount</label>
+
+              <div className="currency-input">
+                <span>Rs.</span>
+
+                <input
+                  type="number"
+                  min="0"
+                  className="order-form-control"
+                  value={form.discount}
+                  onChange={(e) =>
+                    updateForm(
+                      "discount",
+                      Number(
+                        e.target.value
+                      )
+                    )
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="order-form-group">
+              <label>Order Status</label>
+
+              <select
+                className="order-form-control"
+                value={form.status}
+                onChange={(e) =>
+                  updateForm(
+                    "status",
+                    e.target.value
+                  )
+                }
+              >
+                {STATUS_FLOW.map((status) => (
+                  <option
+                    key={status}
+                    value={status}
+                  >
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </section>
+
+        {/* ===================================================
+            NOTES
+        =================================================== */}
+        <section className="order-form-section">
+          <div className="order-section-header">
+            <div className="order-section-number">
+              04
+            </div>
+
+            <div>
+              <h3>Order Notes</h3>
+              <p>
+                Add any additional information for this
+                order.
+              </p>
+            </div>
+          </div>
+
+          <textarea
+            className="order-form-textarea"
+            value={form.notes}
+            onChange={(e) =>
+              updateForm(
+                "notes",
+                e.target.value
+              )
+            }
+            placeholder="Add delivery instructions, customer requests or other notes..."
+          />
+        </section>
+
+        {/* ===================================================
+            TOTALS
+        =================================================== */}
+        <div className="order-total-card">
+          <div className="order-total-content">
+            <div className="order-total-heading">
+              <span>Order Summary</span>
+              <small>
+                {form.items.length}{" "}
+                {form.items.length === 1
+                  ? "product"
+                  : "products"}
+              </small>
+            </div>
+
+            <div className="order-total-row">
+              <span>Subtotal</span>
+
+              <strong>
+                Rs.{" "}
+                {formSubtotal.toLocaleString()}
+              </strong>
+            </div>
+
+            <div className="order-total-row">
+              <span>Delivery Fee</span>
+
+              <strong>
+                Rs.{" "}
+                {Number(
+                  form.deliveryFee || 0
+                ).toLocaleString()}
+              </strong>
+            </div>
+
+            <div className="order-total-row discount">
+              <span>Discount</span>
+
+              <strong>
+                - Rs.{" "}
+                {Number(
+                  form.discount || 0
+                ).toLocaleString()}
+              </strong>
+            </div>
+
+            <div className="order-grand-total">
+              <div>
+                <span>Grand Total</span>
+                <small>Amount payable</small>
+              </div>
+
+              <strong>
+                Rs.{" "}
+                {formTotal.toLocaleString()}
+              </strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* =====================================================
+          FOOTER
+      ===================================================== */}
+      <div className="order-modal-footer">
+        <div className="order-footer-info">
+          <span className="footer-status-dot" />
+
+          {editingId
+            ? "Changes will be saved to this order"
+            : "Review the order before creating it"}
+        </div>
+
+        <div className="order-footer-buttons">
+          <button
+            type="button"
+            className="order-cancel-btn"
+            onClick={() =>
+              setShowFormModal(false)
+            }
+          >
+            Cancel
+          </button>
+
+          <button
+            type="submit"
+            className="order-save-btn"
+            disabled={saving}
+          >
+            {saving ? (
+              <>
+                <span className="save-spinner" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <span>
+                  {editingId ? "✓" : "+"}
+                </span>
+
+                {editingId
+                  ? "Update Order"
+                  : "Create Order"}
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+)}
+      {/* =====================================================
+          VIEW ORDER MODAL
+      ===================================================== */}
+
+{showViewModal && selectedOrder && (
+  <div className="modal-overlay">
+    <div className="order-view-modal">
+
+      {/* =====================================================
+          HEADER
+      ===================================================== */}
+      <div className="order-view-header">
+        <div className="order-view-header-left">
+
+          <div className="order-view-icon">
+            #
+          </div>
+
+          <div>
+            <div className="order-view-eyebrow">
+              ORDER DETAILS
+            </div>
+
+            <h2 className="order-view-title">
+              Order #
+              {getOrderId(selectedOrder)}
+            </h2>
+
+            <p className="order-view-subtitle">
+              Complete information about this order
+            </p>
+          </div>
+
+        </div>
+
+        <button
+          type="button"
+          className="order-view-close"
+          onClick={() =>
+            setShowViewModal(false)
+          }
+          aria-label="Close"
+        >
+          ×
+        </button>
+      </div>
+
+      {/* =====================================================
+          BODY
+      ===================================================== */}
+      <div className="order-view-body">
+
+        {/* ===================================================
+            TOP STATUS
+        =================================================== */}
+        <div className="order-view-status-bar">
+
+          <div>
+            <span className="order-view-small-label">
+              CURRENT STATUS
+            </span>
+
+            <div className="order-view-status-row">
+              <span
+                className={`order-status-badge status-${String(
+                  selectedOrder.status ||
+                    "Pending"
+                )
+                  .toLowerCase()
+                  .replace(/\s+/g, "-")}`}
+              >
+                <span className="status-dot" />
+
+                {selectedOrder.status ||
+                  "Pending"}
+              </span>
+
+              <span className="order-view-status-hint">
+                Order status
+              </span>
+            </div>
+          </div>
+
+          <div className="order-view-status-actions">
+            <button
+              type="button"
+              className="view-timeline-mini-btn"
+              onClick={() => {
+                setShowViewModal(false);
+                openTimelineModal(
+                  selectedOrder
+                );
+              }}
+            >
+              <span>◷</span>
+              View Timeline
+            </button>
+          </div>
+
+        </div>
+
+        {/* ===================================================
+            ORDER INFORMATION
+        =================================================== */}
+        <div className="order-view-info-grid">
+
+          {/* CUSTOMER */}
+          <div className="order-info-card">
+
+            <div className="order-info-card-icon">
+              👤
+            </div>
+
+            <div className="order-info-card-content">
+              <span className="order-info-label">
+                CUSTOMER
+              </span>
+
+              <strong>
+                {getCustomerName(
+                  selectedOrder,
+                  customers
+                )}
+              </strong>
+
+              {selectedOrder.customerId &&
+                typeof selectedOrder.customerId ===
+                  "object" && (
+                  <>
+                    {selectedOrder.customerId.email && (
+                      <small>
+                        {
+                          selectedOrder.customerId
+                            .email
+                        }
+                      </small>
+                    )}
+
+                    {selectedOrder.customerId.phone && (
+                      <small>
+                        {
+                          selectedOrder.customerId
+                            .phone
+                        }
+                      </small>
+                    )}
+                  </>
+                )}
+            </div>
+
+          </div>
+
+          {/* DELIVERY DATE */}
+          <div className="order-info-card">
+
+            <div className="order-info-card-icon">
+              📅
+            </div>
+
+            <div className="order-info-card-content">
+              <span className="order-info-label">
+                DELIVERY DATE
+              </span>
+
+              <strong>
+                {selectedOrder.deliveryDate
+                  ? formatDate(
+                      selectedOrder.deliveryDate
+                    )
+                  : "Not scheduled"}
+              </strong>
+
+              {selectedOrder.deliverySlotId && (
+                <small>
+                  Delivery slot selected
+                </small>
+              )}
+            </div>
+
+          </div>
+
+          {/* PAYMENT */}
+          <div className="order-info-card">
+
+            <div className="order-info-card-icon">
+              💳
+            </div>
+
+            <div className="order-info-card-content">
+              <span className="order-info-label">
+                PAYMENT
+              </span>
+
+              <strong>
+                {selectedOrder.paymentMethod ||
+                  "Not specified"}
+              </strong>
+
+              <small
+                className={`payment-status ${
+                  String(
+                    selectedOrder.paymentStatus ||
+                      "Pending"
+                  ).toLowerCase()
+                }`}
+              >
+                {selectedOrder.paymentStatus ||
+                  "Pending"}
+              </small>
+            </div>
+
+          </div>
+
+          {/* ITEMS COUNT */}
+          <div className="order-info-card">
+
+            <div className="order-info-card-icon">
+              🛒
+            </div>
+
+            <div className="order-info-card-content">
+              <span className="order-info-label">
+                ORDER ITEMS
+              </span>
+
+              <strong>
+                {(
+                  selectedOrder.items || []
+                ).length}{" "}
+                {(
+                  selectedOrder.items || []
+                ).length === 1
+                  ? "Product"
+                  : "Products"}
+              </strong>
+
+              <small>
+                {(
+                  selectedOrder.items || []
+                ).reduce(
+                  (total, item) =>
+                    total +
+                    Number(
+                      item.quantity || 0
+                    ),
+                  0
+                )}{" "}
+                total units
+              </small>
+            </div>
+
+          </div>
+
+        </div>
+
+        {/* ===================================================
+            DELIVERY ADDRESS
+        =================================================== */}
+        <div className="order-view-section">
+
+          <div className="order-view-section-header">
+            <div className="order-view-section-icon">
+              📍
+            </div>
+
+            <div>
+              <h3>Delivery Address</h3>
+
+              <p>
+                Address where this order will be delivered
+              </p>
+            </div>
+          </div>
+
+          <div className="order-address-box">
+            <span className="address-pin">
+              📍
+            </span>
+
+            <div>
+              <strong>
+                Delivery Location
+              </strong>
+
+              <p>
+                {selectedOrder.deliveryAddress ||
+                  "No delivery address provided."}
+              </p>
+            </div>
+          </div>
+
+        </div>
+
+        {/* ===================================================
+            ORDER ITEMS
+        =================================================== */}
+        <div className="order-view-section">
+
+          <div className="order-view-section-header">
+            <div className="order-view-section-icon">
+              🛍️
+            </div>
+
+            <div>
+              <h3>Order Items</h3>
+
+              <p>
+                Products included in this order
+              </p>
+            </div>
+
+            <span className="order-items-pill">
+              {(selectedOrder.items || []).length}{" "}
+              {(
+                selectedOrder.items || []
+              ).length === 1
+                ? "Item"
+                : "Items"}
+            </span>
+          </div>
+
+          <div className="order-view-items">
+
+            {(selectedOrder.items || []).length ===
+            0 ? (
+              <div className="order-view-empty">
+                <span>🛒</span>
+
+                <strong>
+                  No items found
+                </strong>
+
+                <p>
+                  This order does not contain any products.
+                </p>
+              </div>
+            ) : (
+              selectedOrder.items.map(
+                (item, index) => {
+                  const price =
+                    getItemPrice(item);
+
+                  const quantity =
+                    Number(
+                      item.quantity || 0
+                    );
+
+                  const product =
+                    item.productId &&
+                    typeof item.productId ===
+                      "object"
+                      ? item.productId
+                      : null;
+
+                  const productName =
+                    product?.nameEn ||
+                    product?.nameUr ||
+                    getItemName(item) ||
+                    "Product";
+                  const productImage =
+                    (product?.image  ? `${BASE_URL}${product.image}` : null);
+                  const itemTotal =
+                    price * quantity;
+
+                  return (
+                    <div
+                      className="order-view-item"
+                      key={
+                        item._id ||
+                        index
+                      }
+                    >
+
+                      {/* NUMBER */}
+                      <div className="order-view-item-number">
+                        {String(
+                          index + 1
+                        ).padStart(2, "0")}
+                      </div>
+
+                      {/* IMAGE */}
+                      <div className="order-view-product-image">
+                        {productImage ? (
+                          <img
+                            src={
+                              productImage
+                            }
+                            alt={
+                              productName
+                            }
+                            onError={(
+                              e
+                            ) => {
+                              e.currentTarget.style.display =
+                                "none";
                             }}
-                          >
-                            {statusText}
-                          </div>
+                          />
+                        ) : (
+                          <span>
+                            🛍️
+                          </span>
                         )}
                       </div>
 
-                      <div
-                        style={{
-                          textAlign: "right",
-                          fontSize: "12px",
-                          color: "#777",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {entry.createdAt
-                          ? new Date(
-                              entry.createdAt
-                            ).toLocaleDateString()
-                          : ""}
+                      {/* PRODUCT INFO */}
+                      <div className="order-view-product-info">
 
-                        <br />
+                        <strong>
+                          {productName}
+                        </strong>
 
-                        <span
-                          style={{
-                            color: "#999",
-                          }}
-                        >
-                          {entry.createdAt
-                            ? new Date(
-                                entry.createdAt
-                              ).toLocaleTimeString([], {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })
-                            : ""}
-                        </span>
+                        {product?.nameUr &&
+                          product.nameUr !==
+                            product.nameEn && (
+                            <small>
+                              {
+                                product.nameUr
+                              }
+                            </small>
+                          )}
+
+                        {product?._id && (
+                          <span>
+                            Product ID:{" "}
+                            {String(
+                              product._id
+                            )}
+                          </span>
+                        )}
+
                       </div>
+
+                      {/* QTY */}
+                      <div className="order-view-item-qty">
+
+                        <span>
+                          QTY
+                        </span>
+
+                        <strong>
+                          {quantity}
+                        </strong>
+
+                      </div>
+
+                      {/* PRICE */}
+                      <div className="order-view-item-price">
+
+                        <span>
+                          UNIT PRICE
+                        </span>
+
+                        <strong>
+                          Rs.{" "}
+                          {price.toLocaleString()}
+                        </strong>
+
+                      </div>
+
+                      {/* TOTAL */}
+                      <div className="order-view-item-total">
+
+                        <span>
+                          TOTAL
+                        </span>
+
+                        <strong>
+                          Rs.{" "}
+                          {itemTotal.toLocaleString()}
+                        </strong>
+
+                      </div>
+
+                    </div>
+                  );
+                }
+              )
+            )}
+
+          </div>
+        </div>
+
+        {/* ===================================================
+            SUMMARY
+        =================================================== */}
+        <div className="order-view-summary-grid">
+
+          {/* LEFT SUMMARY */}
+          <div className="order-view-section order-view-summary-section">
+
+            <div className="order-view-section-header">
+              <div className="order-view-section-icon">
+                🧾
+              </div>
+
+              <div>
+                <h3>Order Summary</h3>
+
+                <p>
+                  Charges and final amount
+                </p>
+              </div>
+            </div>
+
+            <div className="order-summary-lines">
+
+              <div className="order-summary-line">
+                <span>
+                  Items Subtotal
+                </span>
+
+                <strong>
+                  Rs.{" "}
+                  {(
+                    (selectedOrder.items ||
+                      []).reduce(
+                      (total, item) =>
+                        total +
+                        getItemPrice(
+                          item
+                        ) *
+                          Number(
+                            item.quantity ||
+                              0
+                          ),
+                      0
+                    )
+                  ).toLocaleString()}
+                </strong>
+              </div>
+
+              <div className="order-summary-line">
+                <span>
+                  Delivery Fee
+                </span>
+
+                <strong>
+                  Rs.{" "}
+                  {Number(
+                    selectedOrder.deliveryFee ||
+                      0
+                  ).toLocaleString()}
+                </strong>
+              </div>
+
+              <div className="order-summary-line discount">
+                <span>
+                  Discount
+                </span>
+
+                <strong>
+                  - Rs.{" "}
+                  {Number(
+                    selectedOrder.discount ||
+                      0
+                  ).toLocaleString()}
+                </strong>
+              </div>
+
+              <div className="order-summary-divider" />
+
+              <div className="order-grand-total-new">
+
+                <div>
+                  <span>
+                    Grand Total
+                  </span>
+
+                  <small>
+                    Amount payable
+                  </small>
+                </div>
+
+                <strong>
+                  Rs.{" "}
+                  {getOrderTotal(
+                    selectedOrder
+                  ).toLocaleString()}
+                </strong>
+
+              </div>
+
+            </div>
+
+          </div>
+
+          {/* RIGHT PAYMENT CARD */}
+          <div className="order-view-section">
+
+            <div className="order-view-section-header">
+              <div className="order-view-section-icon">
+                💰
+              </div>
+
+              <div>
+                <h3>Payment Information</h3>
+
+                <p>
+                  Payment details for this order
+                </p>
+              </div>
+            </div>
+
+            <div className="payment-detail-list">
+
+              <div className="payment-detail-row">
+                <span>
+                  Method
+                </span>
+
+                <strong>
+                  {selectedOrder.paymentMethod ||
+                    "—"}
+                </strong>
+              </div>
+
+              <div className="payment-detail-row">
+                <span>
+                  Status
+                </span>
+
+                <strong
+                  className={`payment-badge ${String(
+                    selectedOrder.paymentStatus ||
+                      "Pending"
+                  ).toLowerCase()}`}
+                >
+                  {selectedOrder.paymentStatus ||
+                    "Pending"}
+                </strong>
+              </div>
+
+              <div className="payment-detail-row">
+                <span>
+                  Delivery Fee
+                </span>
+
+                <strong>
+                  Rs.{" "}
+                  {Number(
+                    selectedOrder.deliveryFee ||
+                      0
+                  ).toLocaleString()}
+                </strong>
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+        {/* ===================================================
+            NOTES
+        =================================================== */}
+        {selectedOrder.notes && (
+          <div className="order-view-section">
+
+            <div className="order-view-section-header">
+              <div className="order-view-section-icon">
+                📝
+              </div>
+
+              <div>
+                <h3>Order Notes</h3>
+
+                <p>
+                  Additional information for this order
+                </p>
+              </div>
+            </div>
+
+            <div className="order-notes-box">
+              {selectedOrder.notes}
+            </div>
+
+          </div>
+        )}
+
+      </div>
+
+      {/* =====================================================
+          FOOTER
+      ===================================================== */}
+      <div className="order-view-footer">
+
+        <div className="order-footer-meta">
+          <span className="footer-status-dot" />
+
+          Order #
+          {getOrderId(selectedOrder)}
+        </div>
+
+        <div className="order-view-footer-actions">
+
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => {
+              setShowViewModal(false);
+
+              openTimelineModal(
+                selectedOrder
+              );
+            }}
+          >
+            ◷ View Timeline
+          </button>
+
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => {
+              setShowViewModal(false);
+
+              openEditModal(
+                selectedOrder
+              );
+            }}
+          >
+            ✎ Edit Order
+          </button>
+
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+)}
+
+      {/* =====================================================
+          TIMELINE MODAL
+      ===================================================== */}
+{showTimelineModal && (
+  <div
+    className="timeline-overlay"
+    onClick={() => setShowTimelineModal(false)}
+  >
+    <div
+      className="timeline-modal-new"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* HEADER */}
+      <div className="timeline-header-new">
+        <div>
+          <div className="timeline-eyebrow">ORDER TRACKING</div>
+
+          <h2>Order Timeline</h2>
+
+          <div className="timeline-order-meta">
+            <span className="timeline-order-number">
+              #{selectedOrder?.orderNumber || "N/A"}
+            </span>
+
+            <span className="timeline-meta-dot">•</span>
+
+            <span>
+              {selectedOrder?.customer?.name ||
+                selectedOrder?.customerName ||
+                "Customer"}
+            </span>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          className="timeline-close-btn"
+          onClick={() => setShowTimelineModal(false)}
+        >
+          ✕
+        </button>
+      </div>
+
+      {/* CURRENT STATUS SUMMARY */}
+      <div className="timeline-status-summary">
+        <div className="timeline-status-summary-left">
+          <div className="timeline-status-icon">
+            ✓
+          </div>
+
+          <div>
+            <div className="timeline-summary-label">
+              CURRENT STATUS
+            </div>
+
+            <div className="timeline-current-status">
+              {selectedOrder?.status || "Pending"}
+            </div>
+          </div>
+        </div>
+
+        <div className="timeline-summary-right">
+          <span className="timeline-summary-label">
+            ORDER TOTAL
+          </span>
+
+          <strong>
+            Rs.{" "}
+            {Number(
+              selectedOrder?.totalAmount ||
+                selectedOrder?.total ||
+                0
+            ).toLocaleString()}
+          </strong>
+        </div>
+      </div>
+
+      {/* PROGRESS */}
+      <div className="timeline-progress-section">
+        <div className="timeline-section-heading">
+          <div>
+            <h3>Order Progress</h3>
+            <p>Track the current stage of this order</p>
+          </div>
+        </div>
+
+        <div className="timeline-progress-scroll">
+          <div className="timeline-progress">
+            {[
+              "Pending",
+              "Confirmed",
+              "Preparing",
+              "Ready",
+              "Out for Delivery",
+              "Delivered",
+            ].map((status, index) => {
+              const currentStatus =
+                selectedOrder?.status || "Pending";
+
+              const statusIndex = [
+                "Pending",
+                "Confirmed",
+                "Preparing",
+                "Ready",
+                "Out for Delivery",
+                "Delivered",
+              ].indexOf(currentStatus);
+
+              const isCompleted = index < statusIndex;
+              const isCurrent = index === statusIndex;
+
+              return (
+                <React.Fragment key={status}>
+                  <div
+                    className={`progress-step ${
+                      isCompleted
+                        ? "completed"
+                        : isCurrent
+                        ? "current"
+                        : ""
+                    }`}
+                  >
+                    <div className="progress-circle">
+                      {isCompleted ? "✓" : index + 1}
                     </div>
 
-                    {/* Message */}
-                    {(entry.message || entry.note) && (
-                      <div
-                        style={{
-                          marginTop: "10px",
-                          fontSize: "14px",
-                          lineHeight: "1.5",
-                          color: "#555",
-                        }}
-                      >
-                        {entry.message || entry.note}
-                      </div>
-                    )}
-
-                    {/* Changed by */}
-                    {entry.changedBy && (
-                      <div
-                        style={{
-                          marginTop: "12px",
-                          paddingTop: "10px",
-                          borderTop: "1px solid #eee",
-                          fontSize: "12px",
-                          color: "#888",
-                        }}
-                      >
-                        Updated by:{" "}
-                        <strong
-                          style={{ color: "#555" }}
-                        >
-                          {entry.changedBy.firstName
-                            ? `${entry.changedBy.firstName} ${
-                                entry.changedBy.lastName || ""
-                              }`
-                            : entry.changedBy.phone ||
-                              entry.changedBy.role ||
-                              "System"}
-                        </strong>
-                      </div>
-                    )}
+                    <div className="progress-label">
+                      {status}
+                    </div>
                   </div>
-                </div>
+
+                  {index < 5 && (
+                    <div
+                      className={`progress-line ${
+                        isCompleted
+                          ? "completed"
+                          : ""
+                      }`}
+                    />
+                  )}
+                </React.Fragment>
               );
             })}
+          </div>
+        </div>
+      </div>
+
+      {/* UPDATE STATUS */}
+      <div className="timeline-update-card">
+        <div className="timeline-update-heading">
+          <div className="timeline-update-icon">
+            ↻
+          </div>
+
+          <div>
+            <h3>Update Order Status</h3>
+            <p>
+              Change the current status of this order
+            </p>
+          </div>
+        </div>
+
+        <div className="timeline-update-controls">
+          <select
+            value={timelineStatus}
+            onChange={(e) =>
+              setTimelineStatus(e.target.value)
+            }
+            className="timeline-status-select"
+          >
+            <option value="Pending">Pending</option>
+            <option value="Confirmed">Confirmed</option>
+            <option value="Preparing">Preparing</option>
+            <option value="Ready">Ready</option>
+            <option value="Out for Delivery">
+              Out for Delivery
+            </option>
+            <option value="Delivered">Delivered</option>
+            <option value="Cancelled">Cancelled</option>
+          </select>
+
+          <button
+            type="button"
+            className="timeline-update-btn"
+            onClick={updateTimelineStatus}
+            disabled={updatingTimelineStatus}
+          >
+            {updatingTimelineStatus ? (
+              <>
+                <span className="timeline-spinner" />
+                Updating...
+              </>
+            ) : (
+              <>
+                Update Status
+                <span>→</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {timelineError && (
+          <div className="timeline-error">
+            <span>!</span>
+            {timelineError}
           </div>
         )}
       </div>
 
-      {/* Footer */}
-      <div style={modalFooterStyle}>
+      {/* TIMELINE HISTORY */}
+      <div className="timeline-history-section">
+        <div className="timeline-section-heading">
+          <div>
+            <h3>Status History</h3>
+            <p>
+              Actual status changes recorded for this order
+            </p>
+          </div>
+
+          <span className="timeline-history-count">
+            {timeline?.length || 0}{" "}
+            {(timeline?.length || 0) === 1
+              ? "event"
+              : "events"}
+          </span>
+        </div>
+
+        <div className="timeline-history-scroll">
+          {timelineLoading ? (
+            <div className="timeline-loading">
+              <div className="timeline-large-spinner" />
+              <span>Loading timeline...</span>
+            </div>
+          ) : timeline?.length > 0 ? (
+            <div className="history-list">
+              {timeline.map((entry, index) => {
+                const status =
+                  entry?.status ||
+                  entry?.newStatus ||
+                  entry?.orderStatus ||
+                  entry?.statusName ||
+                  "Unknown";
+
+                const message =
+                  entry?.message ||
+                  entry?.note ||
+                  entry?.description ||
+                  "";
+
+                const date =
+                  entry?.createdAt ||
+                  entry?.updatedAt ||
+                  entry?.date ||
+                  entry?.timestamp ||
+                  entry?.created_on;
+
+                const isLatest = index === 0;
+
+                return (
+                  <div
+                    className={`history-item ${
+                      isLatest ? "latest" : ""
+                    }`}
+                    key={
+                      entry?._id ||
+                      entry?.id ||
+                      `${status}-${index}`
+                    }
+                  >
+                    <div className="history-rail">
+                      <div
+                        className={`history-dot ${
+                          isLatest ? "active" : ""
+                        }`}
+                      >
+                        {isLatest ? "✓" : ""}
+                      </div>
+
+                      {index <
+                        timeline.length - 1 && (
+                        <div className="history-line" />
+                      )}
+                    </div>
+
+                    <div className="history-card">
+                      <div className="history-card-top">
+                        <div>
+                          <span
+                            className={`history-status-badge status-${status
+                              .toLowerCase()
+                              .replace(/\s+/g, "-")}`}
+                          >
+                            {status}
+                          </span>
+
+                          {isLatest && (
+                            <span className="history-current-badge">
+                              CURRENT
+                            </span>
+                          )}
+                        </div>
+
+                        {date && (
+                          <span className="history-date">
+                            {new Date(date).toLocaleString(
+                              undefined,
+                              {
+                                day: "2-digit",
+                                month: "short",
+                                year: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              }
+                            )}
+                          </span>
+                        )}
+                      </div>
+
+                      {message && (
+                        <div className="history-message">
+                          {message}
+                        </div>
+                      )}
+
+                      {entry?.changedBy && (
+                        <div className="history-user">
+                          Changed by:{" "}
+                          <strong>
+                            {entry.changedBy?.name ||
+                              entry.changedBy?.email ||
+                              entry.changedBy}
+                          </strong>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="timeline-empty">
+              <div className="timeline-empty-icon">
+                ◷
+              </div>
+
+              <h4>No timeline history</h4>
+
+              <p>
+                No status changes have been recorded for
+                this order yet.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* FOOTER */}
+      <div className="timeline-footer-new">
         <button
-          style={secondaryButtonStyle}
+          type="button"
+          className="timeline-refresh-btn"
+          onClick={() => {
+            if (selectedOrder) {
+              loadOrderTimeline(
+                selectedOrder
+              );
+            }
+          }}
+        >
+          ↻ Refresh Timeline
+        </button>
+
+        <button
+          type="button"
+          className="timeline-close-main-btn"
           onClick={() => setShowTimelineModal(false)}
         >
           Close
@@ -2800,5 +4567,3 @@ function Orders() {
     </div>
   );
 }
-
-export default Orders;
