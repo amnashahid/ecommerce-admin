@@ -514,7 +514,7 @@ const Products = () => {
                       key={brand._id}
                       value={brand._id}
                     >
-                      {brand.name.en}
+                      {brand.name}
                     </option>
                   ))}
                 </select>
@@ -900,7 +900,7 @@ const Products = () => {
                 key={brand._id}
                 value={brand._id}
               >
-                {brand.name.en}
+                {brand.name}
               </option>
             ))}
           </select>

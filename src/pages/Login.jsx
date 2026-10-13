@@ -19,9 +19,9 @@ function Login() {
 
     try {
       const data = await login(phone, password);
-
+debugger
       // Save JWT
-      localStorage.setItem("token", data.token);
+      localStorage.setItem("token", data.data.accessToken);
 
       // Save user if returned by API
       if (data.user) {

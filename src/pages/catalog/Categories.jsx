@@ -40,7 +40,8 @@ const Categories = () => {
   const fetchCategories = async () => {
     try {
       setLoading(true);
-
+      var ss= axiosConfig
+debugger
       const response = await axios.get(
         `${API_URL}/categories`,
         axiosConfig
@@ -237,10 +238,16 @@ const Categories = () => {
     );
 
     try {
+      debugger
       await axios.patch(
         `${API_URL}/categories/${category._id}/top`,
         { topCategory },
-        axiosConfig
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+        
       );
     } catch (error) {
       console.error(error);
