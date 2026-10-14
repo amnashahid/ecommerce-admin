@@ -4,15 +4,16 @@ const API_URL = "http://localhost:5000/api";
 const IMAGE_URL = "http://localhost:5000";
 
 const emptyForm = {
-  nameEn: "",
-  nameUr: "",
+  name: "",
   description: "",
   isActive: true,
   startDate: "",
   endDate: "",
-  sortOrder: 0,
   products: [],
 };
+
+const buildImageSrc = (image) =>
+  image ? `${IMAGE_URL}${image.startsWith("/") ? "" : "/"}${image}` : "";
 
 export default function Deals() {
   const [deals, setDeals] = useState([]);
@@ -27,6 +28,8 @@ export default function Deals() {
   const [productSearch, setProductSearch] = useState("");
 
   const [form, setForm] = useState(emptyForm);
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState("");
 
   const token = localStorage.getItem("token");
 
@@ -101,6 +104,8 @@ export default function Deals() {
       products: [],
     });
 
+    setImageFile(null);
+    setImagePreview("");
     setProductSearch("");
     setShowModal(true);
   };
@@ -115,7 +120,17 @@ export default function Deals() {
     setShowModal(false);
     setEditingId(null);
     setForm(emptyForm);
+    setImageFile(null);
+    setImagePreview("");
     setProductSearch("");
+  };
+
+  const handleImageChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
   };
 
   // =========================================================
@@ -163,30 +178,27 @@ export default function Deals() {
 
         return {
           productId: productId,
-          quantity: item.quantity || 1,
-          dealPrice:
-            item.dealPrice !== undefined
-              ? item.dealPrice
-              : 0,
+          price: item.price !== undefined ? item.price : 0,
+          product:
+            item.productId && typeof item.productId === "object"
+              ? item.productId
+              : null,
         };
       });
 
       setEditingId(deal._id);
 
       setForm({
-        nameEn: deal.nameEn || "",
-        nameUr: deal.nameUr || "",
+        name: deal.name || "",
         description: deal.description || "",
         isActive: deal.isActive !== false,
-        startDate: deal.startDate
-          ? formatDateForInput(deal.startDate)
-          : "",
-        endDate: deal.endDate
-          ? formatDateForInput(deal.endDate)
-          : "",
-        sortOrder: deal.sortOrder || 0,
+        startDate: formatDateForInput(deal.startDate),
+        endDate: formatDateForInput(deal.endDate),
         products: dealProducts,
       });
+
+      setImageFile(null);
+      setImagePreview(buildImageSrc(deal.image));
 
       setProductSearch("");
       setShowModal(true);
@@ -209,11 +221,11 @@ export default function Deals() {
       return "";
     }
 
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
+    const pad = (n) => String(n).padStart(2, "0");
 
-    return `${year}-${month}-${day}`;
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(
+      d.getDate()
+    )}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
 
   // =========================================================
@@ -238,8 +250,8 @@ export default function Deals() {
         ...prev.products,
         {
           productId: productId,
-          quantity: 1,
-          dealPrice: product.price || 0,
+          price: product.salePrice || product.price || 0,
+          product,
         },
       ],
     }));
@@ -259,24 +271,6 @@ export default function Deals() {
   };
 
   // =========================================================
-  // UPDATE PRODUCT QUANTITY
-  // =========================================================
-
-  const updateQuantity = (productId, value) => {
-    setForm((prev) => ({
-      ...prev,
-      products: prev.products.map((item) =>
-        item.productId === productId
-          ? {
-              ...item,
-              quantity: value,
-            }
-          : item
-      ),
-    }));
-  };
-
-  // =========================================================
   // UPDATE DEAL PRICE
   // =========================================================
 
@@ -287,7 +281,7 @@ export default function Deals() {
         item.productId === productId
           ? {
               ...item,
-              dealPrice: value,
+              price: value,
             }
           : item
       ),
@@ -307,13 +301,23 @@ export default function Deals() {
     // VALIDATION
     // -------------------------
 
-    if (!form.nameEn.trim()) {
-      alert("English deal name is required");
+    if (!form.name.trim()) {
+      alert("Deal name is required");
       return;
     }
 
-    if (!form.nameUr.trim()) {
-      alert("Urdu deal name is required");
+    if (!editingId && !imageFile) {
+      alert("Deal image is required");
+      return;
+    }
+
+    if (!form.startDate || !form.endDate) {
+      alert("Start date and end date are required");
+      return;
+    }
+
+    if (new Date(form.startDate) >= new Date(form.endDate)) {
+      alert("Start date must be earlier than end date");
       return;
     }
 
@@ -329,18 +333,10 @@ export default function Deals() {
       }
 
       if (
-        item.quantity === "" ||
-        Number(item.quantity) < 1
-      ) {
-        alert("Product quantity must be at least 1");
-        return;
-      }
-
-      if (
-        item.dealPrice === "" ||
-        item.dealPrice === null ||
-        item.dealPrice === undefined ||
-        Number(item.dealPrice) < 0
+        item.price === "" ||
+        item.price === null ||
+        item.price === undefined ||
+        Number(item.price) < 0
       ) {
         alert("Please enter a valid deal price");
         return;
@@ -351,32 +347,25 @@ export default function Deals() {
     // PAYLOAD
     // -------------------------
 
-    const payload = {
-      nameEn: form.nameEn.trim(),
-      nameUr: form.nameUr.trim(),
-      description: form.description.trim(),
+    const payload = new FormData();
+    payload.append("name", form.name.trim());
+    payload.append("description", form.description.trim());
+    payload.append("isActive", String(Boolean(form.isActive)));
+    payload.append("startDate", new Date(form.startDate).toISOString());
+    payload.append("endDate", new Date(form.endDate).toISOString());
+    payload.append(
+      "products",
+      JSON.stringify(
+        form.products.map((item) => ({
+          productId: item.productId,
+          price: Number(item.price),
+        }))
+      )
+    );
 
-      isActive: Boolean(form.isActive),
-
-      startDate: form.startDate
-        ? form.startDate
-        : null,
-
-      endDate: form.endDate
-        ? form.endDate
-        : null,
-
-      sortOrder: Number(form.sortOrder) || 0,
-
-      products: form.products.map((item) => ({
-        productId: item.productId,
-        quantity: Number(item.quantity),
-        dealPrice: Number(item.dealPrice),
-      })),
-    };
-
-    console.log("Sending payload:");
-    console.log(payload);
+    if (imageFile) {
+      payload.append("image", imageFile);
+    }
 
     try {
       setSaving(true);
@@ -391,11 +380,10 @@ export default function Deals() {
         method: method,
 
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
 
-        body: JSON.stringify(payload),
+        body: payload,
       });
 
       const data = await response.json();
@@ -478,7 +466,7 @@ export default function Deals() {
     const search = productSearch.toLowerCase().trim();
 
     if (!search) {
-      return true;
+      return false;
     }
 
     return (
@@ -504,34 +492,30 @@ export default function Deals() {
     );
   };
 
+  const resolveProduct = (item) =>
+    getProduct(item.productId) || item.product;
+
   // =========================================================
   // CALCULATE TOTALS
   // =========================================================
 
   const calculateNormalTotal = () => {
     return form.products.reduce((total, item) => {
-      const product = getProduct(item.productId);
+      const product = resolveProduct(item);
 
       if (!product) {
         return total;
       }
 
-      return (
-        total +
-        Number(product.price || 0) *
-          Number(item.quantity || 0)
-      );
+      return total + Number(product.price || 0);
     }, 0);
   };
 
   const calculateDealTotal = () => {
-    return form.products.reduce((total, item) => {
-      return (
-        total +
-        Number(item.dealPrice || 0) *
-          Number(item.quantity || 0)
-      );
-    }, 0);
+    return form.products.reduce(
+      (total, item) => total + Number(item.price || 0),
+      0
+    );
   };
 
   const normalTotal = calculateNormalTotal();
@@ -583,12 +567,12 @@ export default function Deals() {
 
             <thead>
               <tr>
+                <th>Image</th>
                 <th>Name</th>
                 <th>Products</th>
                 <th>Status</th>
                 <th>Start Date</th>
                 <th>End Date</th>
-                <th>Order</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -599,14 +583,22 @@ export default function Deals() {
                 <tr key={deal._id}>
 
                   <td>
+                    {deal.image ? (
+                      <img
+                        src={buildImageSrc(deal.image)}
+                        alt={deal.name}
+                        className="product-image"
+                      />
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+
+                  <td>
                     <div className="deal-name">
                       <strong>
-                        {deal.nameEn}
+                        {deal.name}
                       </strong>
-
-                      <span>
-                        {deal.nameUr}
-                      </span>
                     </div>
                   </td>
 
@@ -630,7 +622,7 @@ export default function Deals() {
                     {deal.startDate
                       ? new Date(
                           deal.startDate
-                        ).toLocaleDateString()
+                        ).toLocaleString()
                       : "-"}
                   </td>
 
@@ -638,12 +630,8 @@ export default function Deals() {
                     {deal.endDate
                       ? new Date(
                           deal.endDate
-                        ).toLocaleDateString()
+                        ).toLocaleString()
                       : "-"}
-                  </td>
-
-                  <td>
-                    {deal.sortOrder || 0}
                   </td>
 
                   <td>
@@ -752,13 +740,13 @@ export default function Deals() {
                     <div className="form-group">
 
                       <label>
-                        Deal Name (English)
+                        Deal Name
                       </label>
 
                       <input
                         type="text"
-                        name="nameEn"
-                        value={form.nameEn}
+                        name="name"
+                        value={form.name}
                         onChange={handleChange}
                         placeholder="e.g. Family Grocery Deal"
                         required
@@ -769,17 +757,23 @@ export default function Deals() {
                     <div className="form-group">
 
                       <label>
-                        Deal Name (Urdu)
+                        Deal Image
                       </label>
 
                       <input
-                        type="text"
-                        name="nameUr"
-                        value={form.nameUr}
-                        onChange={handleChange}
-                        placeholder="مثلاً فیملی گروسری ڈیل"
-                        required
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageChange}
                       />
+
+                      {imagePreview && (
+                        <img
+                          src={imagePreview}
+                          alt="Deal preview"
+                          className="product-image"
+                          style={{ marginTop: 8 }}
+                        />
+                      )}
 
                     </div>
 
@@ -810,10 +804,11 @@ export default function Deals() {
                       </label>
 
                       <input
-                        type="date"
+                        type="datetime-local"
                         name="startDate"
                         value={form.startDate}
                         onChange={handleChange}
+                        required
                       />
 
                     </div>
@@ -825,26 +820,11 @@ export default function Deals() {
                       </label>
 
                       <input
-                        type="date"
+                        type="datetime-local"
                         name="endDate"
                         value={form.endDate}
                         onChange={handleChange}
-                      />
-
-                    </div>
-
-                    <div className="form-group">
-
-                      <label>
-                        Sort Order
-                      </label>
-
-                      <input
-                        type="number"
-                        name="sortOrder"
-                        value={form.sortOrder}
-                        onChange={handleChange}
-                        min="0"
+                        required
                       />
 
                     </div>
@@ -892,7 +872,14 @@ export default function Deals() {
                     className="product-search"
                   />
 
-                  <div className="product-list">
+                  <div
+                    className="product-list"
+                    style={
+                      productSearch.trim()
+                        ? undefined
+                        : { display: "none" }
+                    }
+                  >
 
                     {filteredProducts.length ===
                     0 ? (
@@ -1019,9 +1006,7 @@ export default function Deals() {
                         (item) => {
 
                           const product =
-                            getProduct(
-                              item.productId
-                            );
+                            resolveProduct(item);
 
                           if (!product) {
                             return null;
@@ -1076,28 +1061,6 @@ export default function Deals() {
                               <div className="product-input">
 
                                 <label>
-                                  Qty
-                                </label>
-
-                                <input
-                                  type="number"
-                                  min="1"
-                                  value={
-                                    item.quantity
-                                  }
-                                  onChange={(e) =>
-                                    updateQuantity(
-                                      item.productId,
-                                      e.target.value
-                                    )
-                                  }
-                                />
-
-                              </div>
-
-                              <div className="product-input">
-
-                                <label>
                                   Deal Price
                                 </label>
 
@@ -1106,7 +1069,7 @@ export default function Deals() {
                                   min="0"
                                   step="0.01"
                                   value={
-                                    item.dealPrice
+                                    item.price
                                   }
                                   onChange={(e) =>
                                     updateDealPrice(
@@ -1414,9 +1377,18 @@ export default function Deals() {
           line-height: 1;
         }
 
+        .modal form {
+          display: flex;
+          flex-direction: column;
+          flex: 1 1 auto;
+          min-height: 0;
+        }
+
         .modal-body {
           padding: 24px;
           overflow-y: auto;
+          flex: 1 1 auto;
+          min-height: 0;
         }
 
         .section {
@@ -1584,7 +1556,7 @@ export default function Deals() {
 
         .selected-product {
           display: grid;
-          grid-template-columns: 1fr 100px 130px 35px;
+          grid-template-columns: 1fr 130px 35px;
           gap: 12px;
           align-items: center;
           padding: 12px;

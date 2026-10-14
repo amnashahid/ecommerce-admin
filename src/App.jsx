@@ -21,7 +21,7 @@ import Deals from "./pages/promotions/Deals";
 import Sections from "./pages/promotions/Sections";
 import PromoCodes from "./pages/promotions/PromoCodes";     
 
-import StoreSettings from "./pages/StoreSettings";
+import Settings from "./pages/Settings";
 import Users from "./pages/Users";
 import Orders from "./pages/Orders";
 
@@ -157,12 +157,12 @@ function AppLayout() {
             }
           />
 
-          {/* Settings */}
+          {/* Settings (store settings, delivery charges, delivery slots) */}
           <Route
             path="/settings"
             element={
               <ProtectedRoute>
-                <StoreSettings />
+                <Settings />
               </ProtectedRoute>
             }
           />
