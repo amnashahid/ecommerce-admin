@@ -191,18 +191,19 @@ const Products = () => {
   // Category / Subcategory
   // ----------------------------------------------------
 
-  const parentCategories = categories.filter(
-    (category) =>
-      !category.parentCategoryId ||
-      category.parentCategoryId === 0 ||
-      category.parentCategoryId === "0"
-  );
+  const getParentId = (category) =>
+    String(category.parentCategoryId?._id ?? category.parentCategoryId ?? "");
+
+  const parentCategories = categories.filter((category) => {
+    const parentId = getParentId(category);
+    return !parentId || parentId === "0";
+  });
 
   const subCategories = categories.filter(
     (category) =>
-      category.parentCategoryId &&
-      category.parentCategoryId.toString() ===
-        form.categoryId?.toString()
+      getParentId(category) !== "" &&
+      getParentId(category) !== "0" &&
+      getParentId(category) === String(form.categoryId || "")
   );
 
   const handleCategoryChange = (e) => {
@@ -258,12 +259,12 @@ const Products = () => {
       data.append("isActive", form.isActive);
       data.append("categoryId", form.categoryId);
 
-      if (form.subCategoryId) {
-        data.append("subCategoryId", form.subCategoryId);
+      if (form.subCategoryId || editingId) {
+        data.append("subCategoryId", form.subCategoryId || "");
       }
 
-      if (form.brandId) {
-        data.append("brandId", form.brandId);
+      if (form.brandId || editingId) {
+        data.append("brandId", form.brandId || "");
       }
 
       if (form.sku) {
@@ -341,6 +342,8 @@ const Products = () => {
       brandId:
         product.brandId?._id ||
         product.brandId ||
+        product.brand?._id ||
+        product.brand ||
         "",
 
       sku: product.sku || "",
