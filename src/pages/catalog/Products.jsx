@@ -741,7 +741,7 @@ const Products = () => {
                 {imagePreview && (
                   <div style={{ marginTop: "10px" }}>
                     <img
-                      src={`${BASE_URL}/${imagePreview}`}
+                      src={`${imagePreview}`}
                       alt="Preview"
                       style={{
                         width: "120px",
