@@ -3,13 +3,13 @@ import { useEffect, useState } from "react";
 import axios from "axios";
 import "./Brands.css";
 
-const API_URL = import.meta.env.VITE_API_URL;
-const BASE_URL = import.meta.env.VITE_BASE_URL;
+import { API_URL , BASE_URL } from "../../services/api";
 
 const initialForm = {
-  nameEn: "",
+  name: "",
   nameUr: "",
   isActive: true,
+  isTop: false,
   image: null,
 };
 
@@ -87,8 +87,7 @@ function Brands() {
     const value = search.toLowerCase();
 
     return (
-      brand.name.en?.toLowerCase().includes(value) ||
-      brand.name.ur?.includes(search)
+      brand.name?.toLowerCase().includes(value)
     );
   });
 
@@ -100,9 +99,9 @@ function Brands() {
     setEditingBrand(null);
 
     setForm({
-      nameEn: "",
-      nameUr: "",
+      name: "",
       isActive: true,
+      isTop: false,
       image: null,
     });
 
@@ -121,9 +120,9 @@ function Brands() {
     setEditingBrand(brand);
 
     setForm({
-      nameEn: brand.name.en || "",
-      nameUr: brand.name.ur || "",
+      name: brand.name || "",
       isActive: brand.isActive ?? true,
+      isTop: brand.isTop ?? false,  
       image: null,
     });
 
@@ -201,16 +200,9 @@ function Brands() {
     setError("");
     setSuccess("");
 
-    if (!form.nameEn.trim()) {
+    if (!form.name?.trim()) {
       setError(
-        "English brand name is required."
-      );
-      return;
-    }
-
-    if (!form.nameUr.trim()) {
-      setError(
-        "Urdu brand name is required."
+        "Brand name is required."
       );
       return;
     }
@@ -220,20 +212,27 @@ function Brands() {
       const data = new FormData();
 
       data.append(
-        "nameEn",
-        form.nameEn
+        "name",
+        form.name   
       );
 
-      data.append(
-        "nameUr",
-        form.nameUr
-      );
+      // data.append(
+      //   "nameUr",
+      //   form.nameUr
+      //    );
 
       data.append(
         "isActive",
         form.isActive
           ? "true"
           : "false"
+      );
+
+      data.append(
+        "isTop",
+        form.isTop
+          ? "true"
+          : "false" 
       );
 
       if (form.image) {
@@ -300,7 +299,7 @@ function Brands() {
 
   const handleDelete = async (brand) => {
     const confirmed = window.confirm(
-      `Are you sure you want to delete "${brand.name.en}"?`
+      `Are you sure you want to delete "${brand.name}"?`
     );
 
     if (!confirmed) return;
@@ -336,7 +335,7 @@ function Brands() {
   return (
     <div className="brands-page">
 
-      {/* -------------------------------- */}
+      {/* -------------------------------- */}a
       {/* HEADER */}
       {/* -------------------------------- */}
 
@@ -457,7 +456,7 @@ function Brands() {
                            BASE_URL +    brand.image
                           }`}
                           alt={
-                            brand.name.en
+                            brand.name
                           }
                           className="brand-image"
 
@@ -477,7 +476,7 @@ function Brands() {
 
                     <td>
                       <strong>
-                        {brand.name.en}
+                        {brand.name}
                       </strong>
                     </td>
 
@@ -491,7 +490,6 @@ function Brands() {
                     </td>
 
                     {/* STATUS */}
-
                     <td>
 
                       {brand.isActive ? (
@@ -501,6 +499,20 @@ function Brands() {
                       ) : (
                         <span className="badge inactive">
                           Inactive
+                        </span>
+                      )}
+
+                    </td>
+
+                    <td>
+
+                      {brand.isTop ? (
+                        <span className="badge active">
+                          Top
+                        </span>
+                      ) : (
+                        <span className="badge inactive">
+                          Not Top
                         </span>
                       )}
 
@@ -605,9 +617,9 @@ function Brands() {
 
                 <input
                   type="text"
-                  name="nameEn"
+                  name="name"
                   value={
-                    form.nameEn
+                    form.name
                   }
                   onChange={
                     handleChange
@@ -617,28 +629,6 @@ function Brands() {
 
               </div>
 
-              {/* URDU */}
-
-              <div className="form-group">
-
-                <label>
-                  Brand Name (Urdu)
-                </label>
-
-                <input
-                  type="text"
-                  name="nameUr"
-                  value={
-                    form.nameUr
-                  }
-                  onChange={
-                    handleChange
-                  }
-                  placeholder="مثلاً نیسلے"
-                  dir="rtl"
-                />
-
-              </div>
 
               {/* IMAGE */}
 
@@ -678,6 +668,26 @@ function Brands() {
               )}
 
               {/* ACTIVE */}
+
+              <div className="checkbox-group">
+
+                <input
+                  type="checkbox"
+                  name="isTop"
+                  checked={
+                    form.isTop
+                  }
+                  onChange={
+                    handleChange
+                  }
+                  id="isTop"
+                />
+
+                <label htmlFor="isTop">
+                  Mark top brand
+                </label>
+
+              </div>
 
               <div className="checkbox-group">
 
@@ -738,4 +748,3 @@ function Brands() {
 }
 
 export default Brands;
-

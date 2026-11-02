@@ -7,7 +7,7 @@ import {
   Package,
   HeartHandshake,
   Ad,
-} from "lucide-react";
+} from "lucide-react";  
 import menuConfig from "./menuConfig";
 
 function MenuItem({ item }) {

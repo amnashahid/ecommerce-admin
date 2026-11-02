@@ -20,8 +20,10 @@ import "./App.css";
 import Deals from "./pages/promotions/Deals";
 import Sections from "./pages/promotions/Sections";
 import PromoCodes from "./pages/promotions/PromoCodes";     
+import Ads from "./pages/promotions/Ads";
 
-import StoreSettings from "./pages/StoreSettings";
+
+import Settings from "./pages/Settings";
 import Users from "./pages/Users";
 import Orders from "./pages/Orders";
 
@@ -136,6 +138,16 @@ function AppLayout() {
             }
           />
 
+          {/* Promotions - Ads */}
+          <Route
+            path="/promotions/ads"
+            element={
+              <ProtectedRoute>
+                <Ads />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Promotions - Promo Codes */}
           <Route
             path="/promotions/promo-codes"
@@ -157,12 +169,12 @@ function AppLayout() {
             }
           />
 
-          {/* Settings */}
+          {/* Settings (store settings, delivery charges, delivery slots) */}
           <Route
             path="/settings"
             element={
               <ProtectedRoute>
-                <StoreSettings />
+                <Settings />
               </ProtectedRoute>
             }
           />

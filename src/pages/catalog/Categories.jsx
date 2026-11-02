@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 import "./Categories.css";
-
-const API_URL = import.meta.env.VITE_API_URL;
-const BASE_URL = import.meta.env.VITE_BASE_URL;
+import { API_URL , BASE_URL } from "../../services/api";
 
 
 const Categories = () => {
@@ -40,7 +38,8 @@ const Categories = () => {
   const fetchCategories = async () => {
     try {
       setLoading(true);
-
+      var ss= axiosConfig
+debugger
       const response = await axios.get(
         `${API_URL}/categories`,
         axiosConfig
@@ -237,10 +236,16 @@ const Categories = () => {
     );
 
     try {
+      debugger
       await axios.patch(
         `${API_URL}/categories/${category._id}/top`,
         { topCategory },
-        axiosConfig
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+        
       );
     } catch (error) {
       console.error(error);

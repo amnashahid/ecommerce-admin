@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from "react";
 import "./Sections.css";
+import { API_URL , BASE_URL } from "../../services/api";
 
-const API_URL = "http://localhost:5000/api";
-const IMAGE_URL = "http://localhost:5000";
 
 const emptyForm = {
   nameEn: "",
@@ -250,7 +249,7 @@ export default function Sections() {
     products.find((product) => product._id === productId);
 
   const imageSrc = (image) =>
-    `${IMAGE_URL}${image.startsWith("/") ? "" : "/"}${image}`;
+    `${BASE_URL}${image.startsWith("/") ? "" : "/"}${image}`;
 
   return (
     <div

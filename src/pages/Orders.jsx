@@ -1,86 +1,47 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
+import { API_URL, BASE_URL } from "../services/api";
 
-const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
-const BASE_URL = (import.meta.env.VITE_BASE_URL || "").replace(/\/$/, "");
 
+// Status values match the backend controller (lowercase keys)
 const STATUS_FLOW = [
-  "Pending",
-  "Confirmed",
-  "Preparing",
-  "Ready",
-  "Out for Delivery",
-  "Delivered",
-  "Cancelled",
+  "pending",
+  "confirmed",
+  "preparing",
+  "out_for_delivery",
+  "delivered",
+  "cancelled",
 ];
 
-const STATUS_META = {
-  Pending: {
-    icon: "○",
-    color: "#f59e0b",
-    bg: "#fff7ed",
-    description: "Order has been placed and is waiting for confirmation.",
-  },
-  Confirmed: {
-    icon: "✓",
-    color: "#3b82f6",
-    bg: "#eff6ff",
-    description: "Order has been confirmed.",
-  },
-  Preparing: {
-    icon: "⚙",
-    color: "#8b5cf6",
-    bg: "#f5f3ff",
-    description: "Order is being prepared.",
-  },
-  Ready: {
-    icon: "✓",
-    color: "#06b6d4",
-    bg: "#ecfeff",
-    description: "Order is ready for dispatch.",
-  },
-  "Out for Delivery": {
-    icon: "➜",
-    color: "#f97316",
-    bg: "#fff7ed",
-    description: "Order is on its way to the customer.",
-  },
-  Delivered: {
-    icon: "✓",
-    color: "#16a34a",
-    bg: "#f0fdf4",
-    description: "Order has been delivered successfully.",
-  },
-  Cancelled: {
-    icon: "×",
-    color: "#dc2626",
-    bg: "#fef2f2",
-    description: "Order has been cancelled.",
-  },
+const STATUS_LABELS = {
+  pending: "Pending",
+  confirmed: "Confirmed",
+  preparing: "Preparing",
+  out_for_delivery: "Out for Delivery",
+  delivered: "Delivered",
+  cancelled: "Cancelled",
 };
+
+const PROGRESS_STEPS = STATUS_FLOW.filter(
+  (status) => status !== "cancelled"
+);
 
 const EMPTY_ITEM = {
   productId: "",
-  productName: "",
-  productNameUr: "",
+  name: "",
+  image: "",
   quantity: 1,
   unitPrice: 0,
-  dealId: "",
-  dealItem: false,
 };
 
 const EMPTY_FORM = {
   customerId: "",
-  addressId: "",
-  deliveryDate: "",
-  deliverySlotId: "",
   deliveryAddress: "",
-  paymentMethod: "Cash on Delivery",
-  paymentStatus: "Pending",
-  deliveryFee: 0,
-  discount: 0,
-  notes: "",
-  status: "Pending",
+  deliveryDistanceKm: 0,
+  deliverySlotId: "",
+  deliverySlotText: "",
+  paymentMethod: "COD",
+  deliveryCharge: 0,
   items: [],
 };
 
@@ -152,10 +113,50 @@ const normalizeStatus = (status) => {
     .replace(/\s+/g, " ");
 };
 
+const statusKey = (status) =>
+  normalizeStatus(status).replace(/ /g, "_");
+
+const statusClass = (status) =>
+  normalizeStatus(status).replace(/ /g, "-");
+
+const getStatusLabel = (status) =>
+  STATUS_LABELS[statusKey(status)] || status || "Pending";
+
+const fullName = (user) =>
+  [user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
+  user?.name ||
+  "";
+
+const imageUrl = (image) => {
+  if (!image) return null;
+
+  return /^https?:\/\//i.test(image) ? image : `${BASE_URL}${image}`;
+};
+
+// Merges product items and deal items into one list for display
+const getOrderItems = (order) => {
+  const products = (order?.productItems || []).map((item) => ({
+    ...item,
+    isDeal: false,
+    unitPrice: Number(item.unitPrice || 0),
+    ref: item.product,
+  }));
+
+  const deals = (order?.dealItems || []).map((item) => ({
+    ...item,
+    isDeal: true,
+    unitPrice: Number(item.dealPrice || 0),
+    ref: item.deal,
+  }));
+
+  return [...products, ...deals];
+};
+
 const getStatusName = (item) => {
   if (!item) return "";
 
   return (
+    item.toStatus ||
     item.status ||
     item.newStatus ||
     item.orderStatus ||
@@ -168,8 +169,8 @@ const getTimelineMessage = (item) => {
   if (!item) return "";
 
   return (
-    item.message ||
     item.note ||
+    item.message ||
     item.description ||
     item.reason ||
     ""
@@ -278,54 +279,35 @@ const getObjectResponse = (response, fallback = null) => {
 const getCustomerName = (order, customers) => {
   if (!order) return "—";
 
-  if (typeof order.customerId === "object") {
-    return (
-      order.customerId?.name ||
-      "Customer"
-    );
+  if (order.user && typeof order.user === "object") {
+    return fullName(order.user) || order.user.email || "Customer";
   }
 
-  if (order.customer?.name) {
-    return order.customer.name;
-  }
-
-  const customerId = getId(order.customerId);
+  const userId = getId(order.user);
 
   const customer = customers.find(
-    (item) => getId(item) === customerId
+    (item) => getId(item) === userId
   );
 
-  if (!customer) return customerId || "—";
+  if (!customer) return userId || "—";
 
-  return (
-    customer.name ||
-    customer.fullName ||
-    customer.email ||
-    "Customer"
-  );
+  return fullName(customer) || customer.email || "Customer";
 };
 
 const getCustomerPhone = (order, customers) => {
   if (!order) return "";
 
-  if (typeof order.customerId === "object") {
-    return (
-      order.customerId?.phone ||
-      ""
-    );
+  if (order.user && typeof order.user === "object") {
+    return order.user.phone || "";
   }
 
-  if (order.customer?.phone) {
-    return order.customer.phone;
-  }
-
-  const customerId = getId(order.customerId);
+  const userId = getId(order.user);
 
   const customer = customers.find(
-    (item) => getId(item) === customerId
+    (item) => getId(item) === userId
   );
 
-  return customer?.phone || customer?.mobile || "";
+  return customer?.phone || "";
 };
 
 const getOrderTotal = (order) => {
@@ -346,10 +328,9 @@ const getItemPrice = (item) => {
 
 const getItemName = (item) => {
   return (
-    item?.productName ||
-    item?.nameEn ||
-    item?.product?.nameEn ||
-    item?.product?.name ||
+    item?.name ||
+    item?.ref?.nameEn ||
+    item?.ref?.name ||
     "Product"
   );
 };
@@ -365,20 +346,19 @@ export default function Orders() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
   const [showFormModal, setShowFormModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
   const [showTimelineModal, setShowTimelineModal] = useState(false);
 
-  const [editingId, setEditingId] = useState("");
   const [selectedOrder, setSelectedOrder] = useState(null);
 
   const [timeline, setTimeline] = useState([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineError, setTimelineError] = useState("");
   const [timelineStatus, setTimelineStatus] =
-    useState("Pending");
+    useState("pending");
+  const [timelineNote, setTimelineNote] = useState("");
   const [updatingTimelineStatus, setUpdatingTimelineStatus] =
     useState(false);
 
@@ -398,15 +378,24 @@ export default function Orders() {
     try {
       setLoading(true);
 
-      const response = await axios.get(
-        `${API_URL}/orders`,
-        authConfig()
-      );
+      const PAGE_LIMIT = 100;
 
-      const data = getArrayResponse(response, "orders");
+      const fetchPage = (page) =>
+        axios.get(`${API_URL}/orders`, {
+          ...authConfig(),
+          params: { page, limit: PAGE_LIMIT },
+        });
 
-      console.log("ORDERS API RESPONSE:", response.data);
-      console.log("NORMALIZED ORDERS:", data);
+      const first = await fetchPage(1);
+
+      let data = getArrayResponse(first, "orders");
+
+      const pages = Number(first?.data?.pagination?.pages || 1);
+
+      for (let page = 2; page <= pages; page += 1) {
+        const next = await fetchPage(page);
+        data = [...data, ...getArrayResponse(next, "orders")];
+      }
 
       setOrders(data);
     } catch (err) {
@@ -479,34 +468,16 @@ export default function Orders() {
     }
 
     const response = await axios.get(
-      `${API_URL}/orders/${id}/timeline`,
+      `${API_URL}/orders/${id}/workflow`,
       authConfig()
     );
 
-    console.log(
-      "ORDER TIMELINE API RESPONSE:",
-      response.data
-    );
+    const workflow = Array.isArray(response?.data?.workflow)
+      ? response.data.workflow
+      : [];
 
-    const responseData = response?.data;
-
-    if (Array.isArray(responseData)) {
-      return responseData;
-    }
-
-    if (Array.isArray(responseData?.data)) {
-      return responseData.data;
-    }
-
-    if (Array.isArray(responseData?.timeline)) {
-      return responseData.timeline;
-    }
-
-    if (Array.isArray(responseData?.data?.timeline)) {
-      return responseData.data.timeline;
-    }
-
-    return [];
+    // Controller returns oldest first; the UI shows newest first
+    return [...workflow].reverse();
   };
 
   useEffect(() => {
@@ -532,8 +503,8 @@ export default function Orders() {
 
       if (filter === "Processing") {
         result = result.filter((order) =>
-          ["Confirmed", "Preparing", "Ready"].includes(
-            order.status
+          ["confirmed", "preparing"].includes(
+            statusKey(order.status)
           )
         );
       }
@@ -581,9 +552,12 @@ export default function Orders() {
 
         return (
           id.toLowerCase().includes(query) ||
+          String(order.orderNumber || "")
+            .toLowerCase()
+            .includes(query) ||
           customer.toLowerCase().includes(query) ||
           phone.toLowerCase().includes(query) ||
-          String(order.status || "")
+          getStatusLabel(order.status)
             .toLowerCase()
             .includes(query)
         );
@@ -604,7 +578,7 @@ export default function Orders() {
         (status) => status === normalizeStatus("Pending")
       ).length,
       inProgress: statuses.filter((status) =>
-        ["confirmed", "preparing", "ready", "out for delivery"].includes(
+        ["confirmed", "preparing", "out for delivery"].includes(
           status
         )
       ).length,
@@ -623,8 +597,6 @@ export default function Orders() {
       ...EMPTY_FORM,
       items: [],
     });
-
-    setEditingId("");
   };
 
   const openCreateModal = () => {
@@ -632,91 +604,6 @@ export default function Orders() {
     setError("");
     setMessage("");
     setShowFormModal(true);
-  };
-
-  const openEditModal = async (order) => {
-    const orderId = getOrderId(order);
-
-    if (!orderId) {
-      setError(
-        "This order does not contain a valid ID. Check the Orders API response."
-      );
-      console.error("ORDER WITHOUT ID:", order);
-      return;
-    }
-
-    try {
-      setError("");
-
-      const latestOrder = await loadSingleOrder(
-        orderId,
-        order
-      );
-
-      setEditingId(orderId);
-
-      setForm({
-        customerId: getId(
-          latestOrder.customerId
-        ),
-        addressId: getId(
-          latestOrder.addressId
-        ),
-        deliveryDate:
-          latestOrder.deliveryDate
-            ? String(
-                latestOrder.deliveryDate
-              ).substring(0, 10)
-            : "",
-        deliverySlotId: getId(
-          latestOrder.deliverySlotId
-        ),
-        deliveryAddress:
-          latestOrder.deliveryAddress || "",
-        paymentMethod:
-          latestOrder.paymentMethod ||
-          "Cash on Delivery",
-        paymentStatus:
-          latestOrder.paymentStatus ||
-          "Pending",
-        deliveryFee:
-          latestOrder.deliveryFee || 0,
-        discount:
-          latestOrder.discount || 0,
-        notes: latestOrder.notes || "",
-        status:
-          latestOrder.status || "Pending",
-        items: (latestOrder.items || []).map(
-          (item) => ({
-            productId: getId(
-              item.productId
-            ),
-            productName:
-              getItemName(item),
-            productNameUr:
-              item.productNameUr || "",
-            quantity:
-              Number(item.quantity) || 1,
-            unitPrice:
-              getItemPrice(item),
-            dealId:
-              getId(item.dealId),
-            dealItem:
-              Boolean(item.dealItem),
-          })
-        ),
-      });
-
-      setShowFormModal(true);
-    } catch (err) {
-      console.error("Open edit error:", err);
-
-      setError(
-        err?.response?.data?.message ||
-          err?.message ||
-          "Unable to load order."
-      );
-    }
   };
 
   const updateForm = (field, value) => {
@@ -779,77 +666,60 @@ export default function Orders() {
       return;
     }
 
+    if (form.items.some((item) => !item.productId.trim())) {
+      setError("Every item needs a product ID.");
+      return;
+    }
+
+    if (!form.deliveryAddress.trim()) {
+      setError("Delivery address is required.");
+      return;
+    }
+
     try {
       setSaving(true);
       setError("");
       setMessage("");
 
+      const products = form.items.map((item) => {
+        const quantity = Number(item.quantity) || 1;
+        const unitPrice = Number(item.unitPrice) || 0;
+
+        return {
+          product: item.productId.trim(),
+          name: item.name,
+          image: item.image || "",
+          quantity,
+          unitPrice,
+          lineTotal: quantity * unitPrice,
+        };
+      });
+
+      const deliveryCharge = Number(form.deliveryCharge || 0);
+
       const payload = {
-        customerId: form.customerId,
-        addressId:
-          form.addressId || null,
-        deliveryDate:
-          form.deliveryDate || null,
-        deliverySlotId:
-          form.deliverySlotId || null,
-
-        deliveryAddress:
-          form.deliveryAddress || "",
-
-        items: form.items.map((item) => ({
-          productId: item.productId,
-          productName: item.productName,
-          productNameUr:
-            item.productNameUr || "",
-          quantity:
-            Number(item.quantity) || 1,
-          unitPrice:
-            Number(item.unitPrice) || 0,
-          dealId:
-            item.dealId || null,
-          dealItem:
-            Boolean(item.dealId),
-        })),
-
-        deliveryFee:
-          Number(form.deliveryFee || 0),
-
-        discount:
-          Number(form.discount || 0),
-
-        paymentMethod:
-          form.paymentMethod,
-
-        paymentStatus:
-          form.paymentStatus,
-
-        notes: form.notes,
-
-        status:
-          form.status,
+        user: form.customerId,
+        products,
+        deals: [],
+        delivery: {
+          address: form.deliveryAddress,
+          distanceKm: Number(form.deliveryDistanceKm || 0),
+          slotId: form.deliverySlotId || undefined,
+          slotText: form.deliverySlotText || "",
+        },
+        subtotal: formSubtotal,
+        deliveryCharge,
+        total: formSubtotal + deliveryCharge,
+        paymentMethod: form.paymentMethod,
       };
 
-      if (editingId) {
-        await axios.put(
-          `${API_URL}/orders/${editingId}`,
-          payload,
-          authConfig()
-        );
+      await axios.post(
+        `${API_URL}/orders`,
+        payload,
+        authConfig()
+      );
 
-        setMessage(
-          "Order updated successfully."
-        );
-      } else {
-        await axios.post(
-          `${API_URL}/orders`,
-          payload,
-          authConfig()
-        );
-
-        setMessage(
-          "Order created successfully."
-        );
-      }
+      setMessage("Order created successfully.");
 
       setShowFormModal(false);
       resetForm();
@@ -910,86 +780,25 @@ export default function Orders() {
   };
 
   /* =======================================================
-     DELETE
-  ======================================================= */
-
-  const deleteOrder = async (order) => {
-    const orderId = getOrderId(order);
-
-    if (!orderId) {
-      setError(
-        "Order ID is missing. The order cannot be deleted."
-      );
-      console.error(
-        "DELETE ORDER WITHOUT ID:",
-        order
-      );
-      return;
-    }
-
-    const confirmed = window.confirm(
-      "Are you sure you want to delete this order?"
-    );
-
-    if (!confirmed) return;
-
-    try {
-      setDeleting(true);
-      setError("");
-
-      await axios.delete(
-        `${API_URL}/orders/${orderId}`,
-        authConfig()
-      );
-
-      setMessage(
-        "Order deleted successfully."
-      );
-
-      await loadOrders();
-    } catch (err) {
-      console.error("Delete order error:", err);
-
-      setError(
-        err?.response?.data?.message ||
-          err?.response?.data?.error ||
-          err?.message ||
-          "Unable to delete order."
-      );
-    } finally {
-      setDeleting(false);
-    }
-  };
-
-  /* =======================================================
      TIMELINE
   ======================================================= */
 
   const openTimelineModal = async (order) => {
-    console.log(
-      "TIMELINE CLICKED ORDER:",
-      order
-    );
-
     const orderId = getOrderId(order);
-
-    console.log(
-      "RESOLVED TIMELINE ORDER ID:",
-      orderId
-    );
 
     setTimeline([]);
     setTimelineError("");
+    setTimelineNote("");
 
     if (!orderId) {
       setSelectedOrder(order);
       setTimelineStatus(
-        order?.status || "Pending"
+        statusKey(order?.status) || "pending"
       );
       setShowTimelineModal(true);
 
       setTimelineError(
-        "Order ID is missing from this order record. Open the browser console and check the order object returned by GET /orders."
+        "Order ID is missing from this order record."
       );
 
       return;
@@ -1001,7 +810,7 @@ export default function Orders() {
     });
 
     setTimelineStatus(
-      order?.status || "Pending"
+      statusKey(order?.status) || "pending"
     );
 
     setShowTimelineModal(true);
@@ -1026,20 +835,15 @@ export default function Orders() {
       );
 
       setTimelineStatus(
-        normalizedLatestOrder.status ||
-          order.status ||
-          "Pending"
+        statusKey(normalizedLatestOrder.status) ||
+          statusKey(order.status) ||
+          "pending"
       );
 
       const timelineData =
         await loadOrderTimeline(
           orderId
         );
-
-      console.log(
-        "NORMALIZED TIMELINE:",
-        timelineData
-      );
 
       setTimeline(
         Array.isArray(timelineData)
@@ -1104,7 +908,7 @@ export default function Orders() {
   ) => {
     const currentStatus =
       selectedOrder?.status ||
-      "Pending";
+      "pending";
 
     const currentIndex =
       STATUS_FLOW.findIndex(
@@ -1120,12 +924,12 @@ export default function Orders() {
 
     if (
       normalizeStatus(status) ===
-      normalizeStatus("Cancelled")
+      normalizeStatus("cancelled")
     ) {
       if (reached) return "completed";
       if (
         normalizeStatus(currentStatus) ===
-        normalizeStatus("Cancelled")
+        normalizeStatus("cancelled")
       ) {
         return "current";
       }
@@ -1209,9 +1013,13 @@ export default function Orders() {
         `${API_URL}/orders/${orderId}/status`,
         {
           status: timelineStatus,
+          note: timelineNote.trim(),
+          source: "admin",
         },
         authConfig()
       );
+
+      setTimelineNote("");
 
       const latestOrder =
         await loadSingleOrder(
@@ -1242,14 +1050,14 @@ export default function Orders() {
       );
 
       setTimelineStatus(
-        normalizedOrder.status ||
+        statusKey(normalizedOrder.status) ||
           timelineStatus
       );
 
       await loadOrders();
 
       setMessage(
-        `Order status changed to "${normalizedOrder.status || timelineStatus}".`
+        `Order status changed to "${getStatusLabel(normalizedOrder.status || timelineStatus)}".`
       );
     } catch (err) {
       console.error(
@@ -1289,7 +1097,8 @@ export default function Orders() {
       await axios.put(
         `${API_URL}/orders/${orderId}/status`,
         {
-          status,
+          status: statusKey(status),
+          source: "admin",
         },
         authConfig()
       );
@@ -1297,7 +1106,7 @@ export default function Orders() {
       await loadOrders();
 
       setMessage(
-        `Order status changed to ${status}.`
+        `Order status changed to ${getStatusLabel(status)}.`
       );
     } catch (err) {
       console.error(
@@ -1328,8 +1137,7 @@ export default function Orders() {
 
   const formTotal =
     formSubtotal +
-    Number(form.deliveryFee || 0) -
-    Number(form.discount || 0);
+    Number(form.deliveryCharge || 0);
 
   /* =======================================================
      RENDER
@@ -2616,9 +2424,8 @@ export default function Orders() {
                         >
                           <td>
                             <div className="order-id">
-                              #
-                              {orderId ||
-                                "N/A"}
+                              {order.orderNumber ||
+                                `#${orderId || "N/A"}`}
                             </div>
 
                             <div
@@ -2628,9 +2435,8 @@ export default function Orders() {
                                 marginTop: 3,
                               }}
                             >
-                              {order.items
-                                ?.length ||
-                                0}{" "}
+                              {getOrderItems(order)
+                                .length}{" "}
                               item(s)
                             </div>
                           </td>
@@ -2653,17 +2459,15 @@ export default function Orders() {
 
                           <td>
                             {formatDate(
-                              order.createdAt ||
-                                order.orderDate ||
-                                order.deliveryDate
+                              order.createdAt
                             )}
                           </td>
 
                           <td>
                             <div>
-                              {formatDate(
-                                order.deliveryDate
-                              )}
+                              {order.delivery
+                                ?.slotText ||
+                                "—"}
                             </div>
 
                             <div
@@ -2671,11 +2475,11 @@ export default function Orders() {
                                 color: "#999",
                                 fontSize: 11,
                                 marginTop: 3,
+                                maxWidth: 220,
                               }}
                             >
-                              {order.deliverySlot
-                                ?.name ||
-                                order.deliverySlotName ||
+                              {order.delivery
+                                ?.address ||
                                 ""}
                             </div>
                           </td>
@@ -2713,7 +2517,8 @@ export default function Orders() {
                                 )
                               )}
                             </select> */}
-                            {status}
+                            {order.statusText ||
+                              getStatusLabel(status)}
                           </td>
 
                           <td>
@@ -2730,17 +2535,6 @@ export default function Orders() {
                               </button>
 
                               <button
-                                className="action-button"
-                                onClick={() =>
-                                  openEditModal(
-                                    order
-                                  )
-                                }
-                              >
-                                Edit
-                              </button>
-
-                              <button
                                 className="action-button timeline"
                                 onClick={() =>
                                   openTimelineModal(
@@ -2749,20 +2543,6 @@ export default function Orders() {
                                 }
                               >
                                 Timeline
-                              </button>
-
-                              <button
-                                className="action-button danger"
-                                onClick={() =>
-                                  deleteOrder(
-                                    order
-                                  )
-                                }
-                                disabled={
-                                  deleting
-                                }
-                              >
-                                Delete
                               </button>
                             </div>
                           </td>
@@ -2793,26 +2573,18 @@ export default function Orders() {
       <div className="order-modal-header">
         <div className="order-modal-heading">
           <div className="order-modal-icon">
-            {editingId ? "✎" : "+"}
+            {"+"}
           </div>
 
           <div>
             <div className="order-modal-eyebrow">
-              {editingId
-                ? "ORDER MANAGEMENT"
-                : "NEW ORDER"}
+              NEW ORDER
             </div>
 
-            <h2>
-              {editingId
-                ? "Edit Order"
-                : "Create Order"}
-            </h2>
+            <h2>Create Order</h2>
 
             <p>
-              {editingId
-                ? "Update customer, delivery and payment information."
-                : "Create a new customer order and add its products."}
+              Create a new customer order and add its products.
             </p>
           </div>
         </div>
@@ -2891,65 +2663,49 @@ export default function Orders() {
                     key={getId(customer)}
                     value={getId(customer)}
                   >
-                    {customer.name || "Customer"}
+                    {fullName(customer) ||
+                      customer.email ||
+                      "Customer"}
                   </option>
                 ))}
               </select>
             </div>
 
             <div className="order-form-group">
-              <label>Address ID</label>
+              <label>Distance (km)</label>
 
               <input
+                type="number"
+                min="0"
+                step="0.1"
                 className="order-form-control"
-                value={form.addressId}
+                value={form.deliveryDistanceKm}
                 onChange={(e) =>
                   updateForm(
-                    "addressId",
-                    e.target.value
+                    "deliveryDistanceKm",
+                    Number(e.target.value)
                   )
                 }
-                placeholder="Enter address ID"
               />
             </div>
 
             <div className="order-form-group order-form-full">
-              <label>Delivery Address</label>
+              <label>
+                Delivery Address
+                <span>*</span>
+              </label>
 
               <input
                 className="order-form-control"
                 value={form.deliveryAddress}
                 onChange={(e) =>
-                {
-                  var f=form
-                  debugger
                   updateForm(
                     "deliveryAddress",
                     e.target.value
                   )
-                }}  
+                }
                 placeholder="Enter complete delivery address"
               />
-            </div>
-
-            <div className="order-form-group">
-              <label>Delivery Date</label>
-
-              <div className="order-input-with-icon">
-                <span>📅</span>
-
-                <input
-                  type="date"
-                  className="order-form-control"
-                  value={form.deliveryDate}
-                  onChange={(e) =>
-                    updateForm(
-                      "deliveryDate",
-                      e.target.value
-                    )
-                  }
-                />
-              </div>
             </div>
 
             <div className="order-form-group">
@@ -2965,6 +2721,22 @@ export default function Orders() {
                   )
                 }
                 placeholder="Enter delivery slot ID"
+              />
+            </div>
+
+            <div className="order-form-group">
+              <label>Delivery Slot Text</label>
+
+              <input
+                className="order-form-control"
+                value={form.deliverySlotText}
+                onChange={(e) =>
+                  updateForm(
+                    "deliverySlotText",
+                    e.target.value
+                  )
+                }
+                placeholder="e.g. 10:00 AM - 12:00 PM"
               />
             </div>
           </div>
@@ -3031,19 +2803,30 @@ export default function Orders() {
                   </div>
 
                   <div className="order-item-product">
-                    <label>Product</label>
+                    <label>Product ID</label>
 
                     <input
                       className="order-form-control"
-                      placeholder="Product ID / name"
-                      value={
-                        item.productName ||
-                        item.productId
-                      }
+                      placeholder="Product ID"
+                      value={item.productId}
                       onChange={(e) =>
                         updateItem(
                           index,
-                          "productName",
+                          "productId",
+                          e.target.value
+                        )
+                      }
+                    />
+
+                    <input
+                      className="order-form-control"
+                      style={{ marginTop: 6 }}
+                      placeholder="Product name"
+                      value={item.name}
+                      onChange={(e) =>
+                        updateItem(
+                          index,
+                          "name",
                           e.target.value
                         )
                       }
@@ -3149,8 +2932,7 @@ export default function Orders() {
             <div>
               <h3>Payment & Charges</h3>
               <p>
-                Configure payment, delivery charges and
-                order status.
+                Configure payment method and delivery charge.
               </p>
             </div>
           </div>
@@ -3169,40 +2951,20 @@ export default function Orders() {
                   )
                 }
               >
-                <option>
+                <option value="COD">
                   Cash on Delivery
                 </option>
 
-                <option>Online</option>
+                <option value="Online">Online</option>
 
-                <option>
+                <option value="Bank Transfer">
                   Bank Transfer
                 </option>
               </select>
             </div>
 
             <div className="order-form-group">
-              <label>Payment Status</label>
-
-              <select
-                className="order-form-control"
-                value={form.paymentStatus}
-                onChange={(e) =>
-                  updateForm(
-                    "paymentStatus",
-                    e.target.value
-                  )
-                }
-              >
-                <option>Pending</option>
-                <option>Paid</option>
-                <option>Failed</option>
-                <option>Refunded</option>
-              </select>
-            </div>
-
-            <div className="order-form-group">
-              <label>Delivery Fee</label>
+              <label>Delivery Charge</label>
 
               <div className="currency-input">
                 <span>Rs.</span>
@@ -3211,10 +2973,10 @@ export default function Orders() {
                   type="number"
                   min="0"
                   className="order-form-control"
-                  value={form.deliveryFee}
+                  value={form.deliveryCharge}
                   onChange={(e) =>
                     updateForm(
-                      "deliveryFee",
+                      "deliveryCharge",
                       Number(
                         e.target.value
                       )
@@ -3223,85 +2985,7 @@ export default function Orders() {
                 />
               </div>
             </div>
-
-            <div className="order-form-group">
-              <label>Discount</label>
-
-              <div className="currency-input">
-                <span>Rs.</span>
-
-                <input
-                  type="number"
-                  min="0"
-                  className="order-form-control"
-                  value={form.discount}
-                  onChange={(e) =>
-                    updateForm(
-                      "discount",
-                      Number(
-                        e.target.value
-                      )
-                    )
-                  }
-                />
-              </div>
-            </div>
-
-            <div className="order-form-group">
-              <label>Order Status</label>
-
-              <select
-                className="order-form-control"
-                value={form.status}
-                onChange={(e) =>
-                  updateForm(
-                    "status",
-                    e.target.value
-                  )
-                }
-              >
-                {STATUS_FLOW.map((status) => (
-                  <option
-                    key={status}
-                    value={status}
-                  >
-                    {status}
-                  </option>
-                ))}
-              </select>
-            </div>
           </div>
-        </section>
-
-        {/* ===================================================
-            NOTES
-        =================================================== */}
-        <section className="order-form-section">
-          <div className="order-section-header">
-            <div className="order-section-number">
-              04
-            </div>
-
-            <div>
-              <h3>Order Notes</h3>
-              <p>
-                Add any additional information for this
-                order.
-              </p>
-            </div>
-          </div>
-
-          <textarea
-            className="order-form-textarea"
-            value={form.notes}
-            onChange={(e) =>
-              updateForm(
-                "notes",
-                e.target.value
-              )
-            }
-            placeholder="Add delivery instructions, customer requests or other notes..."
-          />
         </section>
 
         {/* ===================================================
@@ -3329,23 +3013,12 @@ export default function Orders() {
             </div>
 
             <div className="order-total-row">
-              <span>Delivery Fee</span>
+              <span>Delivery Charge</span>
 
               <strong>
                 Rs.{" "}
                 {Number(
-                  form.deliveryFee || 0
-                ).toLocaleString()}
-              </strong>
-            </div>
-
-            <div className="order-total-row discount">
-              <span>Discount</span>
-
-              <strong>
-                - Rs.{" "}
-                {Number(
-                  form.discount || 0
+                  form.deliveryCharge || 0
                 ).toLocaleString()}
               </strong>
             </div>
@@ -3372,9 +3045,7 @@ export default function Orders() {
         <div className="order-footer-info">
           <span className="footer-status-dot" />
 
-          {editingId
-            ? "Changes will be saved to this order"
-            : "Review the order before creating it"}
+          Review the order before creating it
         </div>
 
         <div className="order-footer-buttons">
@@ -3400,13 +3071,9 @@ export default function Orders() {
               </>
             ) : (
               <>
-                <span>
-                  {editingId ? "✓" : "+"}
-                </span>
+                <span>+</span>
 
-                {editingId
-                  ? "Update Order"
-                  : "Create Order"}
+                Create Order
               </>
             )}
           </button>
@@ -3439,8 +3106,8 @@ export default function Orders() {
             </div>
 
             <h2 className="order-view-title">
-              Order #
-              {getOrderId(selectedOrder)}
+              {selectedOrder.orderNumber ||
+                `#${getOrderId(selectedOrder)}`}
             </h2>
 
             <p className="order-view-subtitle">
@@ -3479,17 +3146,17 @@ export default function Orders() {
 
             <div className="order-view-status-row">
               <span
-                className={`order-status-badge status-${String(
+                className={`order-status-badge status-${statusClass(
                   selectedOrder.status ||
-                    "Pending"
-                )
-                  .toLowerCase()
-                  .replace(/\s+/g, "-")}`}
+                    "pending"
+                )}`}
               >
                 <span className="status-dot" />
 
-                {selectedOrder.status ||
-                  "Pending"}
+                {selectedOrder.statusText ||
+                  getStatusLabel(
+                    selectedOrder.status
+                  )}
               </span>
 
               <span className="order-view-status-hint">
@@ -3540,25 +3207,19 @@ export default function Orders() {
                 )}
               </strong>
 
-              {selectedOrder.customerId &&
-                typeof selectedOrder.customerId ===
-                  "object" && (
+              {typeof selectedOrder.user ===
+                "object" &&
+                selectedOrder.user && (
                   <>
-                    {selectedOrder.customerId.email && (
+                    {selectedOrder.user.email && (
                       <small>
-                        {
-                          selectedOrder.customerId
-                            .email
-                        }
+                        {selectedOrder.user.email}
                       </small>
                     )}
 
-                    {selectedOrder.customerId.phone && (
+                    {selectedOrder.user.phone && (
                       <small>
-                        {
-                          selectedOrder.customerId
-                            .phone
-                        }
+                        {selectedOrder.user.phone}
                       </small>
                     )}
                   </>
@@ -3567,7 +3228,7 @@ export default function Orders() {
 
           </div>
 
-          {/* DELIVERY DATE */}
+          {/* DELIVERY SLOT */}
           <div className="order-info-card">
 
             <div className="order-info-card-icon">
@@ -3576,20 +3237,20 @@ export default function Orders() {
 
             <div className="order-info-card-content">
               <span className="order-info-label">
-                DELIVERY DATE
+                DELIVERY SLOT
               </span>
 
               <strong>
-                {selectedOrder.deliveryDate
-                  ? formatDate(
-                      selectedOrder.deliveryDate
-                    )
-                  : "Not scheduled"}
+                {selectedOrder.delivery
+                  ?.slotText ||
+                  "Not scheduled"}
               </strong>
 
-              {selectedOrder.deliverySlotId && (
+              {selectedOrder.delivery
+                ?.distanceKm != null && (
                 <small>
-                  Delivery slot selected
+                  {selectedOrder.delivery.distanceKm}{" "}
+                  km away
                 </small>
               )}
             </div>
@@ -3617,12 +3278,12 @@ export default function Orders() {
                 className={`payment-status ${
                   String(
                     selectedOrder.paymentStatus ||
-                      "Pending"
+                      "pending"
                   ).toLowerCase()
                 }`}
               >
                 {selectedOrder.paymentStatus ||
-                  "Pending"}
+                  "pending"}
               </small>
             </div>
 
@@ -3641,20 +3302,14 @@ export default function Orders() {
               </span>
 
               <strong>
-                {(
-                  selectedOrder.items || []
-                ).length}{" "}
-                {(
-                  selectedOrder.items || []
-                ).length === 1
+                {getOrderItems(selectedOrder).length}{" "}
+                {getOrderItems(selectedOrder).length === 1
                   ? "Product"
                   : "Products"}
               </strong>
 
               <small>
-                {(
-                  selectedOrder.items || []
-                ).reduce(
+                {getOrderItems(selectedOrder).reduce(
                   (total, item) =>
                     total +
                     Number(
@@ -3700,7 +3355,7 @@ export default function Orders() {
               </strong>
 
               <p>
-                {selectedOrder.deliveryAddress ||
+                {selectedOrder.delivery?.address ||
                   "No delivery address provided."}
               </p>
             </div>
@@ -3727,10 +3382,8 @@ export default function Orders() {
             </div>
 
             <span className="order-items-pill">
-              {(selectedOrder.items || []).length}{" "}
-              {(
-                selectedOrder.items || []
-              ).length === 1
+              {getOrderItems(selectedOrder).length}{" "}
+              {getOrderItems(selectedOrder).length === 1
                 ? "Item"
                 : "Items"}
             </span>
@@ -3738,7 +3391,7 @@ export default function Orders() {
 
           <div className="order-view-items">
 
-            {(selectedOrder.items || []).length ===
+            {getOrderItems(selectedOrder).length ===
             0 ? (
               <div className="order-view-empty">
                 <span>🛒</span>
@@ -3752,7 +3405,7 @@ export default function Orders() {
                 </p>
               </div>
             ) : (
-              selectedOrder.items.map(
+              getOrderItems(selectedOrder).map(
                 (item, index) => {
                   const price =
                     getItemPrice(item);
@@ -3763,21 +3416,23 @@ export default function Orders() {
                     );
 
                   const product =
-                    item.productId &&
-                    typeof item.productId ===
+                    item.ref &&
+                    typeof item.ref ===
                       "object"
-                      ? item.productId
+                      ? item.ref
                       : null;
 
                   const productName =
-                    product?.nameEn ||
-                    product?.nameUr ||
-                    getItemName(item) ||
-                    "Product";
+                    getItemName(item);
                   const productImage =
-                    (product?.image  ? `${BASE_URL}${product.image}` : null);
+                    imageUrl(
+                      item.image ||
+                        product?.image
+                    );
                   const itemTotal =
-                    price * quantity;
+                    item.lineTotal != null
+                      ? Number(item.lineTotal)
+                      : price * quantity;
 
                   return (
                     <div
@@ -3826,6 +3481,12 @@ export default function Orders() {
                           {productName}
                         </strong>
 
+                        {item.isDeal && (
+                          <small>
+                            Deal
+                          </small>
+                        )}
+
                         {product?.nameUr &&
                           product.nameUr !==
                             product.nameEn && (
@@ -3838,7 +3499,9 @@ export default function Orders() {
 
                         {product?._id && (
                           <span>
-                            Product ID:{" "}
+                            {item.isDeal
+                              ? "Deal ID: "
+                              : "Product ID: "}
                             {String(
                               product._id
                             )}
@@ -3928,47 +3591,28 @@ export default function Orders() {
 
                 <strong>
                   Rs.{" "}
-                  {(
-                    (selectedOrder.items ||
-                      []).reduce(
-                      (total, item) =>
-                        total +
-                        getItemPrice(
-                          item
-                        ) *
-                          Number(
-                            item.quantity ||
-                              0
-                          ),
-                      0
-                    )
+                  {Number(
+                    selectedOrder.subtotal ??
+                      getOrderItems(selectedOrder).reduce(
+                        (total, item) =>
+                          total +
+                          getItemPrice(item) *
+                            Number(item.quantity || 0),
+                        0
+                      )
                   ).toLocaleString()}
                 </strong>
               </div>
 
               <div className="order-summary-line">
                 <span>
-                  Delivery Fee
+                  Delivery Charge
                 </span>
 
                 <strong>
                   Rs.{" "}
                   {Number(
-                    selectedOrder.deliveryFee ||
-                      0
-                  ).toLocaleString()}
-                </strong>
-              </div>
-
-              <div className="order-summary-line discount">
-                <span>
-                  Discount
-                </span>
-
-                <strong>
-                  - Rs.{" "}
-                  {Number(
-                    selectedOrder.discount ||
+                    selectedOrder.deliveryCharge ||
                       0
                   ).toLocaleString()}
                 </strong>
@@ -4039,23 +3683,23 @@ export default function Orders() {
                 <strong
                   className={`payment-badge ${String(
                     selectedOrder.paymentStatus ||
-                      "Pending"
+                      "pending"
                   ).toLowerCase()}`}
                 >
                   {selectedOrder.paymentStatus ||
-                    "Pending"}
+                    "pending"}
                 </strong>
               </div>
 
               <div className="payment-detail-row">
                 <span>
-                  Delivery Fee
+                  Delivery Charge
                 </span>
 
                 <strong>
                   Rs.{" "}
                   {Number(
-                    selectedOrder.deliveryFee ||
+                    selectedOrder.deliveryCharge ||
                       0
                   ).toLocaleString()}
                 </strong>
@@ -4068,9 +3712,9 @@ export default function Orders() {
         </div>
 
         {/* ===================================================
-            NOTES
+            CANCELLATION
         =================================================== */}
-        {selectedOrder.notes && (
+        {selectedOrder.cancellationReason && (
           <div className="order-view-section">
 
             <div className="order-view-section-header">
@@ -4079,16 +3723,16 @@ export default function Orders() {
               </div>
 
               <div>
-                <h3>Order Notes</h3>
+                <h3>Cancellation Reason</h3>
 
                 <p>
-                  Additional information for this order
+                  Why this order was cancelled
                 </p>
               </div>
             </div>
 
             <div className="order-notes-box">
-              {selectedOrder.notes}
+              {selectedOrder.cancellationReason}
             </div>
 
           </div>
@@ -4104,8 +3748,8 @@ export default function Orders() {
         <div className="order-footer-meta">
           <span className="footer-status-dot" />
 
-          Order #
-          {getOrderId(selectedOrder)}
+          {selectedOrder.orderNumber ||
+            `Order #${getOrderId(selectedOrder)}`}
         </div>
 
         <div className="order-view-footer-actions">
@@ -4122,20 +3766,6 @@ export default function Orders() {
             }}
           >
             ◷ View Timeline
-          </button>
-
-          <button
-            type="button"
-            className="primary-button"
-            onClick={() => {
-              setShowViewModal(false);
-
-              openEditModal(
-                selectedOrder
-              );
-            }}
-          >
-            ✎ Edit Order
           </button>
 
         </div>
@@ -4173,9 +3803,10 @@ export default function Orders() {
             <span className="timeline-meta-dot">•</span>
 
             <span>
-              {selectedOrder?.customer?.name ||
-                selectedOrder?.customerName ||
-                "Customer"}
+              {getCustomerName(
+                selectedOrder,
+                customers
+              )}
             </span>
           </div>
         </div>
@@ -4202,7 +3833,8 @@ export default function Orders() {
             </div>
 
             <div className="timeline-current-status">
-              {selectedOrder?.status || "Pending"}
+              {selectedOrder?.statusText ||
+                getStatusLabel(selectedOrder?.status)}
             </div>
           </div>
         </div>
@@ -4215,8 +3847,7 @@ export default function Orders() {
           <strong>
             Rs.{" "}
             {Number(
-              selectedOrder?.totalAmount ||
-                selectedOrder?.total ||
+              selectedOrder?.total ||
                 0
             ).toLocaleString()}
           </strong>
@@ -4234,25 +3865,13 @@ export default function Orders() {
 
         <div className="timeline-progress-scroll">
           <div className="timeline-progress">
-            {[
-              "Pending",
-              "Confirmed",
-              "Preparing",
-              "Ready",
-              "Out for Delivery",
-              "Delivered",
-            ].map((status, index) => {
+            {PROGRESS_STEPS.map((status, index) => {
               const currentStatus =
-                selectedOrder?.status || "Pending";
+                statusKey(selectedOrder?.status) ||
+                "pending";
 
-              const statusIndex = [
-                "Pending",
-                "Confirmed",
-                "Preparing",
-                "Ready",
-                "Out for Delivery",
-                "Delivered",
-              ].indexOf(currentStatus);
+              const statusIndex =
+                PROGRESS_STEPS.indexOf(currentStatus);
 
               const isCompleted = index < statusIndex;
               const isCurrent = index === statusIndex;
@@ -4273,11 +3892,11 @@ export default function Orders() {
                     </div>
 
                     <div className="progress-label">
-                      {status}
+                      {getStatusLabel(status)}
                     </div>
                   </div>
 
-                  {index < 5 && (
+                  {index < PROGRESS_STEPS.length - 1 && (
                     <div
                       className={`progress-line ${
                         isCompleted
@@ -4316,16 +3935,22 @@ export default function Orders() {
             }
             className="timeline-status-select"
           >
-            <option value="Pending">Pending</option>
-            <option value="Confirmed">Confirmed</option>
-            <option value="Preparing">Preparing</option>
-            <option value="Ready">Ready</option>
-            <option value="Out for Delivery">
-              Out for Delivery
-            </option>
-            <option value="Delivered">Delivered</option>
-            <option value="Cancelled">Cancelled</option>
+            {STATUS_FLOW.map((status) => (
+              <option key={status} value={status}>
+                {getStatusLabel(status)}
+              </option>
+            ))}
           </select>
+
+          <input
+            type="text"
+            className="timeline-status-select"
+            placeholder="Note (optional, used as cancellation reason)"
+            value={timelineNote}
+            onChange={(e) =>
+              setTimelineNote(e.target.value)
+            }
+          />
 
           <button
             type="button"
@@ -4382,25 +4007,16 @@ export default function Orders() {
           ) : timeline?.length > 0 ? (
             <div className="history-list">
               {timeline.map((entry, index) => {
-                const status =
-                  entry?.status ||
-                  entry?.newStatus ||
-                  entry?.orderStatus ||
-                  entry?.statusName ||
-                  "Unknown";
+                const status = getStatusLabel(
+                  getStatusName(entry) || "Unknown"
+                );
 
                 const message =
-                  entry?.message ||
                   entry?.note ||
-                  entry?.description ||
+                  entry?.message ||
                   "";
 
-                const date =
-                  entry?.createdAt ||
-                  entry?.updatedAt ||
-                  entry?.date ||
-                  entry?.timestamp ||
-                  entry?.created_on;
+                const date = getTimelineDate(entry);
 
                 const isLatest = index === 0;
 
@@ -4474,9 +4090,12 @@ export default function Orders() {
                         <div className="history-user">
                           Changed by:{" "}
                           <strong>
-                            {entry.changedBy?.name ||
-                              entry.changedBy?.email ||
-                              entry.changedBy}
+                            {fullName(entry.changedBy) ||
+                              entry.changedBy?.phone ||
+                              (typeof entry.changedBy ===
+                              "string"
+                                ? entry.changedBy
+                                : "System")}
                           </strong>
                         </div>
                       )}
@@ -4507,11 +4126,25 @@ export default function Orders() {
         <button
           type="button"
           className="timeline-refresh-btn"
-          onClick={() => {
-            if (selectedOrder) {
-              loadOrderTimeline(
-                selectedOrder
+          onClick={async () => {
+            const orderId = getOrderId(selectedOrder);
+
+            if (!orderId) return;
+
+            try {
+              setTimelineLoading(true);
+              setTimelineError("");
+              setTimeline(
+                await loadOrderTimeline(orderId)
               );
+            } catch (err) {
+              setTimelineError(
+                err?.response?.data?.message ||
+                  err?.message ||
+                  "Unable to load order timeline."
+              );
+            } finally {
+              setTimelineLoading(false);
             }
           }}
         >
