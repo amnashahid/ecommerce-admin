@@ -97,6 +97,12 @@ const menuConfig = [
     icon: Layers,
   },
   {
+    title: "Ads",
+    parentPath: "/promotions",
+    path: "/promotions/ads",
+    icon: Layers,
+  },
+  {
     title: "Customers",
     path: "/Customers",
     icon: UserRoundGroup,

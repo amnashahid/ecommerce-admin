@@ -20,6 +20,8 @@ import "./App.css";
 import Deals from "./pages/promotions/Deals";
 import Sections from "./pages/promotions/Sections";
 import PromoCodes from "./pages/promotions/PromoCodes";     
+import Ads from "./pages/promotions/Ads";
+
 
 import Settings from "./pages/Settings";
 import Users from "./pages/Users";
@@ -132,6 +134,16 @@ function AppLayout() {
             element={
               <ProtectedRoute>
                 <Sections />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Promotions - Ads */}
+          <Route
+            path="/promotions/ads"
+            element={
+              <ProtectedRoute>
+                <Ads />
               </ProtectedRoute>
             }
           />

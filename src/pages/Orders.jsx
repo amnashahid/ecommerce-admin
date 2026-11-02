@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
+import { API_URL, BASE_URL } from "../services/api";
 
-const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
-const BASE_URL = (import.meta.env.VITE_BASE_URL || "").replace(/\/$/, "");
 
 // Status values match the backend controller (lowercase keys)
 const STATUS_FLOW = [

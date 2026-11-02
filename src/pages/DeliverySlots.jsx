@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 
-const API_URL = import.meta.env.VITE_API_URL;
+import { API_URL, BASE_URL } from "../services/api";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;

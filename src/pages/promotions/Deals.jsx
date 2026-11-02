@@ -1,7 +1,5 @@
 import React, { useEffect, useState } from "react";
-
-const API_URL = "http://localhost:5000/api";
-const IMAGE_URL = "http://localhost:5000";
+import { API_URL , BASE_URL } from "../../services/api";
 
 const emptyForm = {
   name: "",

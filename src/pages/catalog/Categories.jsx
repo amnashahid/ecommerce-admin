@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 import "./Categories.css";
-
-const API_URL = import.meta.env.VITE_API_URL;
-const BASE_URL = import.meta.env.VITE_BASE_URL;
+import { API_URL , BASE_URL } from "../../services/api";
 
 
 const Categories = () => {
