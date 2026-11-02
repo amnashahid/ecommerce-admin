@@ -659,7 +659,7 @@ function Brands() {
 
                   <img
                     src={`${
-                           BASE_URL +  imagePreview
+                            imagePreview
                           }`}
                     alt="Preview"
                   />
