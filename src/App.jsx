@@ -20,7 +20,7 @@ import "./App.css";
 import Deals from "./pages/promotions/Deals";
 import Sections from "./pages/promotions/Sections";
 import PromoCodes from "./pages/promotions/PromoCodes";     
-import Ads from "./pages/promotions/Ads";
+// import Ads from "./pages/promotions/Ads";
 
 
 import Settings from "./pages/Settings";
@@ -139,14 +139,14 @@ function AppLayout() {
           />
 
           {/* Promotions - Ads */}
-          <Route
+          {/* <Route
             path="/promotions/ads"
             element={
               <ProtectedRoute>
                 <Ads />
               </ProtectedRoute>
             }
-          />
+          /> */}
 
           {/* Promotions - Promo Codes */}
           <Route
