@@ -10,8 +10,13 @@ const emptyForm = {
   products: [],
 };
 
-const buildImageSrc = (image) =>
-  image ? `${IMAGE_URL}${image.startsWith("/") ? "" : "/"}${image}` : "";
+const buildImageSrc = (image) => {
+  if (!image) return "";
+
+  return /^https?:\/\//i.test(image)
+    ? image
+    : `${BASE_URL}${image.startsWith("/") ? "" : "/"}${image}`;
+};
 
 export default function Deals() {
   const [deals, setDeals] = useState([]);
@@ -910,7 +915,7 @@ export default function Deals() {
 
                                 {product.image ? (
                                   <img
-                                    src={`${IMAGE_URL}${product.image.startsWith("/") ? "" : "/"}${product.image}`}
+                                    src={buildImageSrc(product.image)}
                                     alt={
                                       product.nameEn
                                     }
@@ -1022,7 +1027,7 @@ export default function Deals() {
 
                                 {product.image ? (
                                   <img
-                                    src={`${IMAGE_URL}${product.image.startsWith("/") ? "" : "/"}${product.image}`}
+                                    src={buildImageSrc(product.image)}
                                     alt={
                                       product.nameEn
                                     }
