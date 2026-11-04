@@ -56,7 +56,7 @@ const Users = () => {
         authConfig
       );
 
-      setUsers(response.data.data || []);
+      setUsers(response.data.users || []);
     } catch (error) {
       console.error(error);
 
