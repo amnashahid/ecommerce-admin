@@ -1,0 +1,22 @@
+@import "tailwindcss/theme.css" layer(theme);
+/* Unlayered so utilities beat the unlayered global h1/h2/p rules in index.css */
+@import "tailwindcss/utilities.css";
+
+.goat-page,
+.goat-page *,
+.goat-page *::before,
+.goat-page *::after {
+  box-sizing: border-box;
+}
+
+.goat-page input,
+.goat-page select,
+.goat-page textarea,
+.goat-page button {
+  font: inherit;
+}
+
+.goat-page input[type="date"] {
+  min-width: 0;
+  cursor: pointer;
+}

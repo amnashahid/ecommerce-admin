@@ -26,6 +26,7 @@ import PromoCodes from "./pages/promotions/PromoCodes";
 import Settings from "./pages/Settings";
 import Users from "./pages/Users";
 import Orders from "./pages/Orders";
+import GoatFormDashboard from "./pages/goats/index";
 
 function AppLayout() {
   const { pathname } = useLocation();
@@ -139,14 +140,14 @@ function AppLayout() {
           />
 
           {/* Promotions - Ads */}
-          {/* <Route
-            path="/promotions/ads"
+          <Route
+            path="/goats"
             element={
               <ProtectedRoute>
-                <Ads />
+                <GoatFormDashboard />
               </ProtectedRoute>
             }
-          /> */}
+          />
 
           {/* Promotions - Promo Codes */}
           <Route

@@ -11,6 +11,7 @@ import {
   Rss,
   UserRoundGroup,
   Settings2,
+  Goal,
 } from "lucide-react";
 
 const menuConfig = [
@@ -112,6 +113,12 @@ const menuConfig = [
     path: "/settings",
     icon: Settings,
   },
+
+  {
+    title: "Goats",
+    path: "/goats",
+    icon: Goal,
+  }
 //   {
 //     title: "Settings",
 //     path: "/settings",
